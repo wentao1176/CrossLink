@@ -1,0 +1,14 @@
+data/
+logs/
+.tools/
+.venv/
+.env
+artifacts/
+__pycache__/
+.pytest_cache/
+*.pyc
+client/.dart_tool/
+client/build/
+client/.flutter-plugins-dependencies
+client/android/local.properties
+.superpowers/
