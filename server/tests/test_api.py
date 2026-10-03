@@ -154,6 +154,8 @@ def test_file_roundtrip_hash_and_ownership(client):
     msg=client.get("/api/v1/messages/pending",headers=auth(b)).json()[0]
     assert msg["type"]=="file" and msg["payload"]["file_id"]==f["id"]
     transfer=client.get("/api/v1/transfers",headers=auth(b)).json()[0]
+    assert transfer["message_id"]==msg["id"]
+    assert client.get("/api/v1/transfers?file_id="+str(uuid.uuid4()),headers=auth(b)).json()==[]
     assert client.patch(f"/api/v1/transfers/{transfer['id']}",headers=auth(b),json={"status":"completed","progress":100}).status_code==200
     assert client.patch(f"/api/v1/transfers/{transfer['id']}",headers=auth(foreign),json={"status":"completed","progress":100}).status_code==404
 
@@ -232,3 +234,16 @@ def test_chunked_request_body_limit(client):
         for _ in range(300):yield b"x"*1024
     response=client.post("/api/v1/messages",headers={**auth(a),"Content-Type":"application/json"},content=chunks())
     assert response.status_code==413
+
+
+def test_unexpected_error_is_sanitized_and_has_request_id(tmp_path, caplog):
+    app = create_app(app_env="test", database_url=f"sqlite:///{tmp_path}/error.db", file_storage_path=str(tmp_path / "files"), web_dist_path=str(tmp_path / "no-web"), jwt_secret="test-secret-32-characters-minimum!!")
+    @app.get("/api/v1/testing-failure")
+    async def broken():
+        raise RuntimeError("SECRET_TOKEN_must_not_leak")
+    with TestClient(app, raise_server_exceptions=False) as c:
+        response = c.get("/api/v1/testing-failure")
+    assert response.status_code == 500
+    assert response.json() == {"code": "INTERNAL_ERROR", "message": "Internal server error", "details": {}}
+    assert response.headers.get("X-Request-ID")
+    assert "SECRET_TOKEN_must_not_leak" not in response.text + caplog.text

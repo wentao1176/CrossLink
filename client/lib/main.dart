@@ -783,11 +783,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   onPressed: c.busy
                       ? null
                       : () => c.download({
-                          'id': '',
-                          'sender_device_id': c.deviceId,
+                          'id': t['message_id'],
+                          'sender_device_id': t['sender_device_id'],
                           'payload': {
+                            ...Map<String, dynamic>.from(t['file']),
                             'file_id': t['file_id'],
-                            'name': t['file']['name'],
                           },
                         }),
                   icon: const Icon(Icons.download),

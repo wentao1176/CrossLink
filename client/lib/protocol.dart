@@ -40,3 +40,6 @@ class MessageCache {
 
   void clear() => _items.clear();
 }
+
+String deviceProfileKey(String endpoint, String account) =>
+    'device_uuid_${Uri.parse(endpoint).origin.toLowerCase()}_${account.trim().toLowerCase()}';

@@ -14,7 +14,7 @@ ssh -F NUL -N -L 127.0.0.1:18765:127.0.0.1:8765 root@47.116.203.177
 
 浏览器访问 `http://127.0.0.1:18765`，注册账号并登录。浏览器自动使用当前站点地址；客户端可在登录页配置服务器地址。原生客户端使用 HTTPS 公网地址，或者 `http://127.0.0.1:8765` SSH/ADB 隧道。连接同账号的另一台设备后选择目标，发送文字、剪贴板或文件；离线消息在重新连接时补收。
 
-Android 安装包位于 `artifacts/CrossLink-0.1.0-arm64-debug.apk`（开发测试签名）。服务器侧下载方式可用 `scp`，本次开发没有把产物下载到本地。公网 HTTPS 未启用前，实机可通过电脑的 SSH 隧道与 `adb reverse tcp:8765 tcp:18765` 接入，再配置 `http://127.0.0.1:8765`。APK 不内置服务器地址。
+Android 安装包位于 `artifacts/CrossLink-0.1.0-arm64-debug.apk`（开发测试签名，ARM64，最低声明 Android 7 / API 24；SHA256 见 `artifacts/SHA256SUMS`）。服务器侧下载方式可用 `scp`，本次开发没有把产物下载到本地。公网 HTTPS 未启用前，实机可通过电脑的 SSH 隧道与 `adb reverse tcp:8765 tcp:18765` 接入，再配置 `http://127.0.0.1:8765`。APK 不内置服务器地址。
 
 Windows 需要 Windows 上的 Flutter 和 Visual Studio C++ 工具链编译（Linux ECS 无法生成 Windows exe）：
 
@@ -53,12 +53,14 @@ CROSSLINK_RESTART_TEST=1 .venv/bin/python deploy/smoke_live.py
 
 最后一条会短暂重启 CrossLink API，创建并清理专属测试账户，验证真实 PostgreSQL、双设备 websocket、2 秒内推送、文件/权限、重启持久化和撤销 Token。
 
-重新构建 `bash deploy/build-clients.sh` 后 `systemctl restart crosslink-api` 更新 Web。构建缓存在 `.tools`，日志在 `logs`。服务开机自动启动，支持失败重启。上传失败/取消清理半成品，文件到期每小时清理，启动时也清理；不代表备份。
+重新构建 `bash deploy/build-clients.sh` 后 `systemctl restart crosslink-api` 更新 Web。构建缓存在 `.tools`，日志在 `logs`。这台 2 GB ECS 的 APK 构建用 `deploy/build-android.py` 约束独立构建进程的内存，使用现有 swap；不修改其他服务或全局内存设置。服务开机自动启动，支持失败重启。上传失败/取消清理半成品，文件到期每小时清理，启动时也清理；不代表备份。
 
 ## 部署与后续
 
 `deploy/crosslink-*.service` 是当前 native 部署；`docker-compose.yml` 是替代方案模板，尚未启动 Docker。使用 Compose 前安装 Docker、停止 native 服务，填写 `.env` 中 POSTGRES_PASSWORD/JWT_SECRET，构建 Web，运行 `docker compose up -d --build`；原生 PostgreSQL 数据与 Docker 数据卷不能直接互用，应 pg_dump/pg_restore 迁移。
 
-`deploy/nginx.conf.example` 是未来 HTTPS 配置，需确定域名、证书后才启用，之后再讨论安全组 443。当前没有域名、TLS、公开注册入口或 Redis 多进程消息总线。账号没有邮箱验证、找回密码、验证码功能；MVP 为自用测试版。首次启动创建 schema，后续 schema 变更需正式迁移工具。
+`deploy/nginx.conf.example` 是未来 HTTPS 配置，需确定域名、证书后才启用，之后再讨论安全组 443。当前没有域名、TLS、公开注册入口或 Redis 多进程消息总线。账号没有邮箱验证、找回密码、验证码功能；MVP 为自用测试版。首次启动创建 schema；本轮已有数据库已应用 `deploy/migrations/001_transfer_message_id.sql`，保留历史记录并补齐传输消息关联。后续 schema 变更应引入正式迁移工具。
 
 下一阶段：Windows 构建与实机验收、Android 后台稳定性与正式签名、公网 HTTPS；之后再按路线做分片续传、OSS、自动剪贴板。
+
+验收记录和限制见 `docs/VERIFICATION.md`。

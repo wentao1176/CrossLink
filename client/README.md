@@ -1,17 +1,6 @@
-# crosslink
+# CrossLink Flutter client
 
-A new Flutter project.
-
-## Getting Started
-
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Shared Android/Windows source plus browser preview. Configure the server on the login screen.
+Builds and caches on this ECS stay in `/home/CrossLink`; source `/home/CrossLink/deploy/flutter-env.sh` before invoking Flutter.
+See the project README for tunnels, native platform requirements, build commands and known limitations.
+Run `flutter analyze` and `flutter test`. The Windows binary requires a Windows build host; Android debug APK is for development testing.

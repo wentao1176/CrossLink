@@ -71,7 +71,10 @@ def create_app(**overrides):
             if len(attempts)>1000:
                 for k in list(attempts):
                     if not attempts[k] or attempts[k][-1]<clock-60:attempts.pop(k,None)
-        response=await call_next(request)
+        try:response=await call_next(request)
+        except Exception as exc:
+            logger.error("request_id=%s endpoint=%s exception_type=%s",request_id,request.url.path,type(exc).__name__)
+            response=JSONResponse({"code":"INTERNAL_ERROR","message":"Internal server error","details":{}},status_code=500)
         response.headers["X-Request-ID"]=request_id
         response.headers["X-Content-Type-Options"]="nosniff"
         logger.info("request_id=%s method=%s endpoint=%s status=%s duration_ms=%.1f",request_id,request.method,request.url.path,response.status_code,(time.monotonic()-started)*1000)

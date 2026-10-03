@@ -49,9 +49,11 @@ def download(file_id:str,request:Request,p=Depends(principal),db=Depends(get_db)
     if not path.is_file():fail(410,"FILE_UNAVAILABLE","File no longer available")
     return FileResponse(path,filename=f.original_name,media_type="application/octet-stream",headers={"X-Content-Type-Options":"nosniff","X-File-SHA256":f.sha256,"Cache-Control":"no-store"})
 @router.get("/transfers")
-def transfers(p=Depends(principal),db=Depends(get_db),limit:int=Query(100,ge=1,le=500)):
-    rows=db.execute(select(Transfer,File).join(File,Transfer.file_id==File.id).where(File.user_id==p.user.id,or_(Transfer.sender_device_id==p.device.id,Transfer.target_device_id==p.device.id)).order_by(Transfer.created_at.desc()).limit(limit))
-    return [{"id":t.id,"file_id":t.file_id,"sender_device_id":t.sender_device_id,"target_device_id":t.target_device_id,"status":t.status,"progress":t.progress,"created_at":t.created_at,"completed_at":t.completed_at,"file":file_view(f)} for t,f in rows]
+def transfers(p=Depends(principal),db=Depends(get_db),limit:int=Query(100,ge=1,le=500),file_id:str|None=Query(default=None,max_length=36)):
+    query=select(Transfer,File).join(File,Transfer.file_id==File.id).where(File.user_id==p.user.id,or_(Transfer.sender_device_id==p.device.id,Transfer.target_device_id==p.device.id))
+    if file_id is not None:query=query.where(Transfer.file_id==file_id)
+    rows=db.execute(query.order_by(Transfer.created_at.desc()).limit(limit))
+    return [{"id":t.id,"message_id":t.message_id,"file_id":t.file_id,"sender_device_id":t.sender_device_id,"target_device_id":t.target_device_id,"status":t.status,"progress":t.progress,"created_at":t.created_at,"completed_at":t.completed_at,"file":file_view(f)} for t,f in rows]
 @router.patch("/transfers/{transfer_id}")
 def transfer(transfer_id:str,body:TransferUpdate,p=Depends(principal),db=Depends(get_db)):
     t=db.get(Transfer,transfer_id)

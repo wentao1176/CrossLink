@@ -58,7 +58,7 @@ def create_message(db,p,body,settings):
     db.add(m);db.flush()
     for device_id in recipients:
         db.add(Receipt(message_id=m.id,device_id=device_id))
-        if body.type in {"file","image"}:db.add(Transfer(file_id=payload["file_id"],sender_device_id=p.device.id,target_device_id=device_id))
+        if body.type in {"file","image"}:db.add(Transfer(message_id=m.id,file_id=payload["file_id"],sender_device_id=p.device.id,target_device_id=device_id))
     if body.type=="clipboard":db.add(Clipboard(user_id=p.user.id,device_id=p.device.id,content=payload["content"],content_hash=payload["content_hash"],expires_at=now()+settings.file_retention_seconds))
     db.commit()
     return m,recipients,True

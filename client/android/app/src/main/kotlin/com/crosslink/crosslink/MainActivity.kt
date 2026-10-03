@@ -20,6 +20,8 @@ import java.util.concurrent.Executors
 class MainActivity : FlutterActivity() {
     private var channel: MethodChannel? = null
     private var pendingShare: Map<String, Any>? = null
+    private var saveResult: MethodChannel.Result? = null
+    private var saveBytes: ByteArray? = null
     private val worker = Executors.newSingleThreadExecutor()
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
@@ -38,6 +40,18 @@ class MainActivity : FlutterActivity() {
                     try { notifyUser(call.argument<String>("title") ?: "CrossLink", call.argument<String>("content") ?: "收到新内容"); result.success(null) }
                     catch (e: Exception) { result.error("NOTIFICATION_FAILED", "Unable to display notification", null) }
                 }
+                "saveFile" -> {
+                    if (saveResult != null) { result.error("SAVE_BUSY", "A save dialog is already open", null) }
+                    else {
+                        saveResult = result
+                        saveBytes = call.argument<ByteArray>("bytes")
+                        try {
+                            require(saveBytes != null && saveBytes!!.size <= 104857600)
+                            val save = Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(call.argument<String>("mime_type") ?: "application/octet-stream").putExtra(Intent.EXTRA_TITLE, call.argument<String>("name") ?: "file")
+                            startActivityForResult(save, 4102)
+                        } catch (e: Exception) { saveResult = null; saveBytes = null; result.error("SAVE_FAILED", "Unable to open save dialog", null) }
+                    }
+                }
                 "openFile" -> {
                     try {
                         val value = call.argument<String>("path") ?: ""
@@ -50,6 +64,21 @@ class MainActivity : FlutterActivity() {
             }
         }
         receiveShare(intent)
+    }
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode != 4102) { super.onActivityResult(requestCode, resultCode, data); return }
+        val result = saveResult ?: return
+        val bytes = saveBytes
+        saveResult = null; saveBytes = null
+        val uri = data?.data
+        if (resultCode != android.app.Activity.RESULT_OK || uri == null || bytes == null) { result.success(null); return }
+        worker.execute {
+            try {
+                contentResolver.openOutputStream(uri, "w")?.use { it.write(bytes) } ?: throw IllegalArgumentException("Unable to write selected file")
+                runOnUiThread { result.success(uri.toString()) }
+            } catch (e: Exception) { runOnUiThread { result.error("SAVE_FAILED", "Unable to save selected file", null) } }
+        }
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); receiveShare(intent) }
     @Suppress("DEPRECATION")

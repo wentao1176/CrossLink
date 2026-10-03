@@ -28,6 +28,9 @@ class Api {
             try {
               await refresh();
               final options = error.requestOptions;
+              if (options.data is FormData) {
+                options.data = (options.data as FormData).clone();
+              }
               options.extra['retried'] = true;
               options.headers['Authorization'] =
                   'Bearer ${tokens!['access_token']}';

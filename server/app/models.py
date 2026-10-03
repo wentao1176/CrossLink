@@ -62,6 +62,7 @@ class File(Identity, Base):
     expires_at: Mapped[int] = mapped_column(BigInteger,index=True)
 class Transfer(Identity, Base):
     __tablename__="transfers"
+    message_id: Mapped[str|None] = mapped_column(ForeignKey("messages.id"),nullable=True)
     file_id: Mapped[str] = mapped_column(ForeignKey("files.id"))
     sender_device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"))
     target_device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"),index=True)

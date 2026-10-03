@@ -58,4 +58,18 @@ void main() {
     }
     expect(cache.items.map((e) => e['id']), ['c', 'b']);
   });
+  test('device identity is stable per normalized account and server', () {
+    expect(
+      deviceProfileKey('https://sync.example.com', ' Alice '),
+      deviceProfileKey('https://sync.example.com', 'alice'),
+    );
+    expect(
+      deviceProfileKey('https://sync.example.com', 'alice'),
+      isNot(deviceProfileKey('https://sync.example.com', 'bob')),
+    );
+    expect(
+      deviceProfileKey('https://one.example.com', 'alice'),
+      isNot(deviceProfileKey('https://two.example.com', 'alice')),
+    );
+  });
 }

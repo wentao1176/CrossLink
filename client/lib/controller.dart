@@ -148,6 +148,8 @@ class CrossLinkController extends ChangeNotifier {
     await run(() async {
       endpoint = normalizeEndpoint(server);
       deviceName = name.trim();
+      final identityKey = deviceProfileKey(endpoint, account);
+      deviceUuid = prefs.getString(identityKey) ?? const Uuid().v4();
       if (deviceName.isEmpty) throw const FormatException('请输入设备名称');
       await shutdown();
       _setupApi();
@@ -180,6 +182,7 @@ class CrossLinkController extends ChangeNotifier {
         },
       );
       await api!.accept(Map<String, dynamic>.from(response.data));
+      await prefs.setString(identityKey, deviceUuid);
       await prefs.setString('endpoint', endpoint);
       await prefs.setString('device_name', deviceName);
       _loadCache();
@@ -257,7 +260,11 @@ class CrossLinkController extends ChangeNotifier {
   }
 
   Future<void> connect() async {
-    if (!signedIn || disposed || _connecting) return;
+    if (!signedIn || disposed) return;
+    if (_connecting) {
+      _scheduleReconnect();
+      return;
+    }
     _connecting = true;
     retry?.cancel();
     connection = '连接中';
@@ -374,6 +381,10 @@ class CrossLinkController extends ChangeNotifier {
         );
       } catch (_) {}
     }
+    if (m['type'] == 'file' || m['type'] == 'image') {
+      transfers = await api!.list('/transfers');
+    }
+    if (m['type'] == 'clipboard') clips = await api!.list('/clipboard');
     update();
   }
 
@@ -502,25 +513,42 @@ class CrossLinkController extends ChangeNotifier {
         },
       );
       final bytes = Uint8List.fromList(response.data!);
-      if (payload['sha256'] != null &&
-          sha256.convert(bytes).toString() != payload['sha256']) {
+      final expectedHash =
+          payload['sha256'] ?? response.headers.value('x-file-sha256');
+      if (expectedHash == null ||
+          sha256.convert(bytes).toString() != expectedHash) {
         throw const FormatException('文件校验失败，请重新下载');
       }
-      final uri = await FilePicker.saveFile(
-        dialogTitle: '保存收到的文件',
-        fileName: payload['name'],
-        bytes: bytes,
-      );
+      final Uri? uri;
+      if (android) {
+        final saved = await PlatformBridge.channel.invokeMethod<String>(
+          'saveFile',
+          {
+            'name': payload['name'],
+            'mime_type': payload['mime_type'] ?? 'application/octet-stream',
+            'bytes': bytes,
+          },
+        );
+        uri = saved == null ? null : Uri.parse(saved);
+      } else {
+        uri = await FilePicker.saveFile(
+          dialogTitle: '保存收到的文件',
+          fileName: payload['name'],
+          bytes: bytes,
+        );
+      }
       if (uri == null) return;
       if (!kIsWeb) {
         downloadedPath = uri.scheme == 'file'
             ? uri.toFilePath()
             : uri.toString();
       }
-      if (m['sender_device_id'] != deviceId) {
+      if (m['sender_device_id'] != deviceId &&
+          m['id'] is String &&
+          (m['id'] as String).isNotEmpty) {
         await api!.dio.post<dynamic>('/messages/${m['id']}/read');
       }
-      final matching = transfers.where(
+      final matching = (await api!.list('/transfers?file_id=$fileId')).where(
         (t) => t['file_id'] == fileId && t['target_device_id'] == deviceId,
       );
       for (final t in matching) {
