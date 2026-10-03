@@ -1,0 +1,92 @@
+"""Real loopback API/PostgreSQL/websocket/file/restart acceptance. Run via SSH."""
+import hashlib,json,os,secrets,subprocess,time,uuid
+from pathlib import Path
+import httpx
+from websockets.sync.client import connect
+from sqlalchemy import create_engine,delete,select
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"server"))
+from app.config import Settings
+from app.models import User,Device,Session,Message,Receipt,File,Transfer,Clipboard
+from sqlalchemy.orm import Session as DB
+base=os.environ.get("CROSSLINK_URL","http://127.0.0.1:8765")
+client=httpx.Client(base_url=base,timeout=20)
+username="smoke_"+secrets.token_hex(5);password=secrets.token_urlsafe(20)
+user_ids=[]
+def check(r,code=200):
+    assert r.status_code==code,(r.status_code,r.text)
+    return r.json() if r.content else None
+
+def register(name):
+    value=check(client.post("/api/v1/auth/register",json={"username":name,"email":name+"@example.com","password":password}),201)
+    user_ids.append(value["id"])
+def login(name,device):
+    return check(client.post("/api/v1/auth/login",json={"account":name,"password":password,"device":{"device_uuid":str(uuid.uuid4()),"device_name":device,"platform":"windows" if device=="PC" else "android"}}))
+def headers(t):return {"Authorization":"Bearer "+t["access_token"]}
+def recv(ws,event):
+    for _ in range(20):
+        value=json.loads(ws.recv(timeout=5))
+        if value.get("event")==event:return value
+    raise AssertionError(event)
+def authenticate(ws,t):
+    ws.send(json.dumps({"type":"auth","token":t["access_token"]}));assert json.loads(ws.recv(timeout=5))["type"]=="auth_ok"
+try:
+    check(client.get("/health"));register(username);register(username+"_foreign")
+    a=login(username,"PC");b=login(username,"Phone");foreign=login(username+"_foreign","Other")
+    assert len(check(client.get("/api/v1/devices",headers=headers(a))))==2
+    socket_url=base.replace("http","ws",1)+"/ws"
+    with connect(socket_url) as wa,connect(socket_url) as wb:
+        authenticate(wa,a);authenticate(wb,b)
+        assert recv(wa,"device.online")["data"]["device_id"]==b["device_id"]
+        start=time.monotonic()
+        mid=check(client.post("/api/v1/messages",headers=headers(b),json={"target_device_id":a["device_id"],"type":"clipboard","payload":{"content":"hello pc — 实时剪贴板"}}),201)["id"]
+        event=recv(wa,"clipboard.updated");assert event["data"]["id"]==mid
+        assert time.monotonic()-start<2
+        wa.send(json.dumps({"type":"ack","message_id":mid}));assert recv(wa,"message.ack")["data"]["status"]=="delivered"
+    print("PASS: real PostgreSQL, two devices, presence, clipboard websocket under 2 seconds, ACK")
+    data="CrossLink 文件传输测试\n".encode()
+    f=check(client.post("/api/v1/files/upload",headers=headers(a),data={"target_device_id":b["device_id"]},files={"file":("验证.txt",data,"text/plain")}),201)
+    received=client.get(f"/api/v1/files/{f['id']}/download",headers=headers(b));assert received.content==data and hashlib.sha256(data).hexdigest()==f["sha256"]
+    check(client.get(f"/api/v1/files/{f['id']}/download",headers=headers(foreign)),404)
+    print("PASS: real multipart upload, download, SHA256, ownership rejection")
+    mid=check(client.post("/api/v1/messages",headers=headers(a),json={"target_device_id":b["device_id"],"type":"text","payload":{"content":"survive restart"}}),201)["id"]
+    if os.environ.get("CROSSLINK_RESTART_TEST")=="1":
+        subprocess.run(["systemctl","restart","crosslink-api"],check=True)
+        for _ in range(40):
+            try:
+                if client.get("/health").status_code==200:break
+            except httpx.HTTPError:pass
+            time.sleep(.25)
+        with connect(socket_url) as wb:
+            authenticate(wb,b)
+            seen=[]
+            for _ in range(3):
+                event=json.loads(wb.recv(timeout=5));seen.append(event["data"]["id"])
+                if mid in seen:break
+            assert mid in seen
+        assert client.get(f"/api/v1/files/{f['id']}/download",headers=headers(b)).content==data
+        print("PASS: API restart preserves credentials, pending replay and stored files")
+    check(client.delete("/api/v1/devices/"+b["device_id"],headers=headers(a)),204)
+    check(client.get("/api/v1/devices",headers=headers(b)),401)
+    check(client.post("/api/v1/auth/refresh",json={"refresh_token":b["refresh_token"]}),401)
+    print("PASS: device revoke invalidates access and refresh")
+finally:
+    client.close()
+    # Delete only the test-created accounts and their rows, never touch user data.
+    settings=Settings();engine=create_engine(settings.database_url)
+    with DB(engine) as db:
+        for user_id in user_ids:
+            device_ids=select(Device.id).where(Device.user_id==user_id)
+            message_ids=select(Message.id).where(Message.user_id==user_id)
+            file_rows=list(db.scalars(select(File).where(File.user_id==user_id)))
+            for f in file_rows:(settings.file_storage_path/f.storage_name).unlink(missing_ok=True)
+            db.execute(delete(Transfer).where(Transfer.sender_device_id.in_(device_ids)))
+            db.execute(delete(Receipt).where(Receipt.message_id.in_(message_ids)))
+            db.execute(delete(Message).where(Message.user_id==user_id))
+            db.execute(delete(Clipboard).where(Clipboard.user_id==user_id))
+            db.execute(delete(File).where(File.user_id==user_id))
+            db.execute(delete(Session).where(Session.user_id==user_id))
+            db.execute(delete(Device).where(Device.user_id==user_id))
+            db.execute(delete(User).where(User.id==user_id))
+        db.commit()
+    engine.dispose()

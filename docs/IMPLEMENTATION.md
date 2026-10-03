@@ -10,9 +10,9 @@ Bind API to 127.0.0.1:8765 and database to 127.0.0.1:55432. No security-group/fi
 Windows binaries require a Windows build host; Linux ECS can validate shared Dart and build web/Android if tools are available. No claim of device-level acceptance until tested on actual Windows/Android devices.
 
 ## Execution plan
-- [ ] Task 1: Create backend test contracts, verify failing API contract, implement FastAPI account/device APIs. Run pytest for registration, login, refresh replay, ownership, logout/revocation.
-- [ ] Task 2: Add reliable messages, per-recipient receipt persistence, presence, heartbeat, offline replay and ACK/read. Test two-device websocket delivery, repeated ACK, offline broadcast and foreign ACK.
-- [ ] Task 3: Add streaming uploads, bounded multipart requests, authorized download, SHA256, expiration and transfer history. Test malformed payload, traversal filename, expired file, limit and cross-account access.
+- [x] Task 1: Create backend test contracts, verify failing API contract, implement FastAPI account/device APIs. Run pytest for registration, login, refresh replay, ownership, logout/revocation.
+- [x] Task 2: Add reliable messages, per-recipient receipt persistence, presence, heartbeat, offline replay and ACK/read. Test two-device websocket delivery, repeated ACK, offline broadcast and foreign ACK.
+- [x] Task 3: Add streaming uploads, bounded multipart requests, authorized download, SHA256, expiration and transfer history. Test malformed payload, traversal filename, expired file, limit and cross-account access.
 - [ ] Task 4: Scaffold Flutter Android/Windows/web project, add secure sessions, explicit endpoint configuration, reconnection, manual clipboard, messaging, file progress/cancellation, notifications/tray and Android sharing. Run analyzer and behavior tests, build web and attempt APK.
 - [ ] Task 5: Deploy project-specific PostgreSQL and API systemd services; test persistent real PostgreSQL/API/websocket/file path through loopback. Add restart test, operational docs, Compose and nginx templates, changelog and Git commits.
 
@@ -21,3 +21,5 @@ Refresh replay and revoked credentials must never restore sessions. Ownership ap
 
 ## Execution ledger
 2026-10-04: user explicitly requests implementation using their existing design; preserve that authorization and execute inline. Fresh empty directory provides isolation from existing server projects; initialize a feature branch here. No local generated artifacts.
+
+2026-10-04: 29 backend tests passed. 5 Dart protocol tests passed; analyzer clean before formatting, lint fixes applied after formatter. Real PostgreSQL loopback acceptance passed including API restart and per-device replay; test data cleaned. Web/Android final builds in progress. Native Windows binary and physical-device acceptance remain external to this Linux build host.

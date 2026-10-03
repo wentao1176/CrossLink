@@ -1,0 +1,12 @@
+data
+logs
+.tools
+.venv
+.env
+.git
+artifacts
+client/.dart_tool
+client/build
+client/.idea
+**/__pycache__
+**/.pytest_cache

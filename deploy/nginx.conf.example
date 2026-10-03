@@ -1,0 +1,25 @@
+# Prepare a certificate and replace sync.example.com before installing.
+# This template is intentionally not active. Public access remains disabled.
+server {
+    listen 443 ssl;
+    server_name sync.example.com;
+    ssl_certificate /etc/letsencrypt/live/sync.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/sync.example.com/privkey.pem;
+    client_max_body_size 101m;
+    location /ws {
+        proxy_pass http://127.0.0.1:8765;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }
+    location / {
+        proxy_pass http://127.0.0.1:8765;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+}

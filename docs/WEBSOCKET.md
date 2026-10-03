@@ -1,0 +1,10 @@
+# Realtime protocol
+Connect `/ws` using ws over SSH loopback or wss after HTTPS setup. Within 10 seconds send `{ "type":"auth", "token":"ACCESS_TOKEN" }`. Server replies `{ "type":"auth_ok", "device_id":"..." }`, marks device online and replays up to 500 pending receipts. Clients also pull `/messages/pending` in batches and ACK each entry, allowing backlog recovery.
+
+Events use `{event,event_id,timestamp,data}`. `timestamp` is Unix seconds. Device events: device.online/device.offline/device.updated/device.revoked. Message types map to message.created, clipboard.updated, file.created, notification.created. **For these message events, data is always the complete REST message object** `{id,message_id,sender_device_id,target_device_id,type,payload,status,created_at}`, preserving one handler and allowing reliable ACK. The design's content-specific fields are in payload; this resolves its illustrative envelope ambiguity.
+
+Every 30 seconds send `{type:"ping"}`; receive `{type:"pong"}`. Server closes after 90 seconds without a packet or at access expiry. Client reconnects with fresh access using delays 1/2/4/8/16/30 seconds and a 90-second pong watchdog. Tokens never appear in URLs. Close 4001 means invalid/revoked/expired session or heartbeat timeout; 4002 means invalid frame. Native secure storage preserves rotating session credentials; browser sessions live in memory only.
+
+ACK: `{type:"ack",message_id:"..."}`; read: `{type:"read",message_id:"..."}`. Reply `message.ack` includes message_id/status; unauthorized ACK yields an error event and cannot mutate another device's receipt. REST ACK/read are also supported. Deduplicate by durable message id, not ephemeral websocket event_id. The client saves received messages before ACK. No automatic clipboard read/write synchronization in this version.
+
+One worker only: the in-memory Hub handles the current MVP, while PostgreSQL stores durable receipts. Redis Compose profile is reserved; do not increase worker count until pub/sub fanout is implemented.

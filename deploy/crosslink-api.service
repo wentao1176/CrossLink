@@ -1,0 +1,21 @@
+[Unit]
+Description=CrossLink API and client
+After=network.target crosslink-postgres.service
+Requires=crosslink-postgres.service
+[Service]
+Type=simple
+User=crosslink
+Group=crosslink
+WorkingDirectory=/home/CrossLink/server
+EnvironmentFile=/home/CrossLink/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/home/CrossLink/.venv/bin/uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8765 --workers 1 --ws-max-size 262144 --no-access-log
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/CrossLink/data/files
+UMask=0077
+[Install]
+WantedBy=multi-user.target
