@@ -19,3 +19,13 @@ Future<bool> openSaved(String path) async {
   }
   return launchUrl(Uri.file(path));
 }
+
+bool _trustInitialized = false;
+Future<void> initializePlatformTrust() async {
+  if (_trustInitialized) return;
+  final ca = await rootBundle.load('assets/platform_ca.pem');
+  SecurityContext.defaultContext.setTrustedCertificatesBytes(
+    ca.buffer.asUint8List(ca.offsetInBytes, ca.lengthInBytes),
+  );
+  _trustInitialized = true;
+}

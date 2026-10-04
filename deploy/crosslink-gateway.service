@@ -1,0 +1,18 @@
+[Unit]
+Description=CrossLink internal TLS gateway
+After=network.target crosslink-api.service
+Requires=crosslink-api.service
+[Service]
+Type=simple
+User=crosslink
+Group=crosslink
+ExecStart=/usr/sbin/nginx -e stderr -p /home/CrossLink/ -c /home/CrossLink/deploy/nginx-platform.conf -g "daemon off;"
+ExecReload=/usr/sbin/nginx -e stderr -p /home/CrossLink/ -c /home/CrossLink/deploy/nginx-platform.conf -s reload
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/CrossLink/data/gateway
+[Install]
+WantedBy=multi-user.target

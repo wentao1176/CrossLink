@@ -61,15 +61,13 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final form = GlobalKey<FormState>();
-  late final server = TextEditingController(text: widget.controller.endpoint);
-  late final name = TextEditingController(text: widget.controller.deviceName);
   final account = TextEditingController(),
       password = TextEditingController(),
       email = TextEditingController();
   bool register = false, obscure = true;
   @override
   void dispose() {
-    for (final c in [server, name, account, password, email]) {
+    for (final c in [account, password, email]) {
       c.dispose();
     }
     super.dispose();
@@ -121,35 +119,10 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                           const SizedBox(height: 22),
                           TextFormField(
-                            controller: server,
-                            decoration: const InputDecoration(
-                              labelText: '服务器地址',
-                              hintText: 'https://sync.example.com',
-                              prefixIcon: Icon(Icons.dns_outlined),
-                            ),
-                            validator: (s) => s == null || s.trim().isEmpty
-                                ? '请输入服务器地址'
-                                : null,
-                          ),
-                          const SizedBox(height: 16),
-                          TextFormField(
-                            controller: name,
-                            decoration: const InputDecoration(
-                              labelText: '设备名称',
-                              prefixIcon: Icon(Icons.devices),
-                            ),
-                            validator: (s) => s == null || s.trim().isEmpty
-                                ? '请输入设备名称'
-                                : null,
-                          ),
-                          const SizedBox(height: 16),
-                          TextFormField(
                             controller: account,
                             autofillHints: const [AutofillHints.username],
                             decoration: InputDecoration(
-                              labelText: register
-                                  ? '用户名（英文字母、数字、下划线）'
-                                  : '用户名或邮箱',
+                              labelText: register ? '用户名（英文字母、数字、下划线）' : '用户名',
                               prefixIcon: const Icon(Icons.person_outline),
                             ),
                             validator: (s) =>
@@ -204,8 +177,6 @@ class _LoginScreenState extends State<LoginScreen> {
                                       await c.login(
                                         account.text.trim(),
                                         password.text,
-                                        server.text,
-                                        name.text,
                                         email: register
                                             ? email.text.trim()
                                             : null,
@@ -804,19 +775,17 @@ class _HomeScreenState extends State<HomeScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'CrossLink 0.1.0',
+          'CrossLink 0.2.0',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20),
         ),
         const SizedBox(height: 20),
-        Text('服务器：${c.endpoint}'),
-        const SizedBox(height: 10),
         Text('设备：${c.deviceName}'),
         const SizedBox(height: 10),
         const Text('剪贴板：手动发送 · 收到后点击复制'),
         const SizedBox(height: 10),
         const Text('文件保留：7 天 · 最大 100 MB'),
         const SizedBox(height: 10),
-        const Text('Android 在应用打开期间保持实时连接，退出后由离线消息补收。'),
+        const Text('Android 关闭界面后继续接收消息，退出登录会停止同步。'),
         const SizedBox(height: 10),
         const Text('Windows 关闭窗口后继续驻留托盘，托盘菜单可完全退出。'),
         const SizedBox(height: 20),

@@ -1,5 +1,5 @@
 """Real loopback API/PostgreSQL/websocket/file/restart acceptance. Run via SSH."""
-import hashlib,json,os,secrets,subprocess,time,uuid
+import hashlib,json,os,secrets,subprocess,time,uuid,ssl
 from pathlib import Path
 import httpx
 from websockets.sync.client import connect
@@ -10,7 +10,9 @@ from app.config import Settings
 from app.models import User,Device,Session,Message,Receipt,File,Transfer,Clipboard
 from sqlalchemy.orm import Session as DB
 base=os.environ.get("CROSSLINK_URL","http://127.0.0.1:8765")
-client=httpx.Client(base_url=base,timeout=20)
+ca=os.environ.get("CROSSLINK_CA")
+client=httpx.Client(base_url=base,timeout=20,verify=ca or True)
+ws_options={"ssl":ssl.create_default_context(cafile=ca)} if base.startswith("https://") else {}
 username="smoke_"+secrets.token_hex(5);password=secrets.token_urlsafe(20)
 user_ids=[]
 def check(r,code=200):
@@ -35,7 +37,7 @@ try:
     a=login(username,"PC");b=login(username,"Phone");foreign=login(username+"_foreign","Other")
     assert len(check(client.get("/api/v1/devices",headers=headers(a))))==2
     socket_url=base.replace("http","ws",1)+"/ws"
-    with connect(socket_url) as wa,connect(socket_url) as wb:
+    with connect(socket_url,**ws_options) as wa,connect(socket_url,**ws_options) as wb:
         authenticate(wa,a);authenticate(wb,b)
         assert recv(wa,"device.online")["data"]["device_id"]==b["device_id"]
         start=time.monotonic()
@@ -57,7 +59,7 @@ try:
                 if client.get("/health").status_code==200:break
             except httpx.HTTPError:pass
             time.sleep(.25)
-        with connect(socket_url) as wb:
+        with connect(socket_url,**ws_options) as wb:
             authenticate(wb,b)
             seen=[]
             for _ in range(3):

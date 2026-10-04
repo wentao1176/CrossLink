@@ -13,3 +13,4 @@ client/.flutter-plugins-dependencies
 client/android/local.properties
 .superpowers/
 client/android/.kotlin/
+deploy/platform_tls/

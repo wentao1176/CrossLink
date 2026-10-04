@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +13,7 @@ class PlatformBridge with WindowListener {
   tray.TrayIcon? _tray;
   tray.Menu? _menu;
   Future<void> Function(Map<String, dynamic>)? onShare;
+  Future<void> Function(Map<String, dynamic>)? onBackground;
   Future<void> Function()? onClipboard;
   Future<void> Function()? onFiles;
   Future<void> Function()? onExit;
@@ -18,6 +21,18 @@ class PlatformBridge with WindowListener {
       !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
   bool get android =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+  Future<String> deviceName() async {
+    if (windows) return Platform.environment['COMPUTERNAME'] ?? 'Windows 电脑';
+    if (android) {
+      try {
+        return await channel.invokeMethod<String>('deviceName') ?? 'Android 手机';
+      } catch (_) {
+        return 'Android 手机';
+      }
+    }
+    return '设备';
+  }
+
   Future<void> initialize() async {
     if (windows) {
       await windowManager.ensureInitialized();
@@ -68,6 +83,11 @@ class PlatformBridge with WindowListener {
     }
     if (android) {
       channel.setMethodCallHandler((call) async {
+        if (call.method == 'backgroundEvent' && call.arguments is String) {
+          await onBackground?.call(
+            Map<String, dynamic>.from(jsonDecode(call.arguments)),
+          );
+        }
         if (call.method == 'share' && call.arguments is Map) {
           await onShare?.call(Map<String, dynamic>.from(call.arguments));
         }
@@ -79,6 +99,33 @@ class PlatformBridge with WindowListener {
       }
     }
   }
+
+  Future<Map<String, dynamic>?> backgroundSnapshot() async {
+    final value = await channel.invokeMethod<String>('backgroundSnapshot');
+    return value == null ? null : Map<String, dynamic>.from(jsonDecode(value));
+  }
+
+  Future<Map<String, dynamic>> startBackground(
+    String endpoint,
+    Map<String, dynamic> tokens,
+  ) async {
+    final value = await channel.invokeMethod<String>('backgroundStart', {
+      'endpoint': endpoint,
+      'tokens': jsonEncode(tokens),
+    });
+    return Map<String, dynamic>.from(jsonDecode(value!));
+  }
+
+  Future<Map<String, dynamic>> refreshBackground(
+    Map<String, dynamic> tokens,
+  ) async {
+    final value = await channel.invokeMethod<String>('backgroundRefresh', {
+      'access_token': tokens['access_token'],
+    });
+    return Map<String, dynamic>.from(jsonDecode(value!));
+  }
+
+  Future<void> stopBackground() => channel.invokeMethod<void>('backgroundStop');
 
   Future<void> _safe(Future<void> Function() action) async {
     try {

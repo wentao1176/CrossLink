@@ -8,6 +8,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import androidx.core.content.ContextCompat
+import org.json.JSONObject
 import android.provider.OpenableColumns
 import androidx.core.app.NotificationCompat
 import io.flutter.embedding.android.FlutterActivity
@@ -18,6 +20,7 @@ import java.util.UUID
 import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
+    private var eventListener: ((JSONObject) -> Unit)? = null
     private var channel: MethodChannel? = null
     private var pendingShare: Map<String, Any>? = null
     private var saveResult: MethodChannel.Result? = null
@@ -26,8 +29,74 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
         channel = MethodChannel(engine.dartExecutor.binaryMessenger, "crosslink/native")
+        eventListener = { value -> runOnUiThread { channel?.invokeMethod("backgroundEvent", value.toString()) } }
+        SyncService.listener = eventListener
         channel!!.setMethodCallHandler { call, result ->
             when (call.method) {
+                "backgroundSnapshot" -> {
+                    worker.execute {
+                        try {
+                            val snapshot = SyncService.client?.let { client ->
+                                val persisted = SessionStore.read(this)
+                                persisted?.put("tokens", client.snapshot())
+                            } ?: SessionStore.read(this)
+                            runOnUiThread { result.success(snapshot?.toString()) }
+                        } catch (_: Exception) { runOnUiThread { result.error("SESSION_STORAGE", "Session storage unavailable", null) } }
+                    }
+                }
+                "backgroundStart" -> {
+                    val endpoint = call.argument<String>("endpoint") ?: ""
+                    val tokens = call.argument<String>("tokens") ?: ""
+                    worker.execute {
+                        try {
+                            require(endpoint.startsWith("https://"))
+                            val existing = SyncService.client
+                            val persisted = SessionStore.read(this)
+                            if (existing != null && persisted?.optString("endpoint") == endpoint &&
+                                existing.snapshot().optString("device_id") == JSONObject(tokens).optString("device_id")) {
+                                val current = existing.snapshot().toString()
+                                runOnUiThread { result.success(current) }
+                                return@execute
+                            }
+                            val owner = UUID.randomUUID().toString()
+                            val owned = JSONObject(tokens).put("_native_owner", owner)
+                            SessionStore.save(this, JSONObject().put("endpoint", endpoint).put("tokens", owned).put("owner", owner))
+                            runOnUiThread {
+                                try {
+                                    ContextCompat.startForegroundService(this, Intent(this, SyncService::class.java).putExtra("replace", true))
+                                    result.success(owned.toString())
+                                } catch (_: Exception) { result.error("BACKGROUND_START", "Background messaging unavailable", null) }
+                            }
+                        } catch (_: Exception) { runOnUiThread { result.error("SESSION_STORAGE", "Session storage unavailable", null) } }
+                    }
+                }
+                "backgroundRefresh" -> {
+                    val stale = call.argument<String>("access_token")
+                    worker.execute {
+                        try {
+                            for (i in 0 until 80) {
+                                if (SyncService.client != null) break
+                                Thread.sleep(25)
+                            }
+                            val client = SyncService.client ?: throw IllegalStateException("Background messaging unavailable")
+                            val tokens = client.refresh(stale)
+                            runOnUiThread { result.success(tokens.toString()) }
+                        } catch (_: SessionRevoked) { runOnUiThread { result.error("SESSION_REVOKED", "Session revoked", null) } }
+                        catch (_: Exception) { runOnUiThread { result.error("BACKGROUND_REFRESH", "Platform unavailable", null) } }
+                    }
+                }
+                "backgroundStop" -> {
+                    // Stop the refresh owner before clearing durable credentials.
+                    val stopping = SyncService.client
+                    stopping?.stop()
+                    stopService(Intent(this, SyncService::class.java))
+                    worker.execute {
+                        stopping?.awaitStopped()
+                        SessionStore.clear(this)
+                        runOnUiThread { result.success(null) }
+                    }
+                }
+                "deviceName" -> result.success("${Build.MANUFACTURER} ${Build.MODEL}")
                 "getInitialShare" -> { result.success(pendingShare); pendingShare = null }
                 "clearShares" -> { File(cacheDir, "crosslink-shares").listFiles()?.forEach { it.delete() }; result.success(null) }
                 "requestNotifications" -> {
@@ -64,6 +133,13 @@ class MainActivity : FlutterActivity() {
             }
         }
         receiveShare(intent)
+    }
+    override fun onDestroy() {
+        if (SyncService.listener === eventListener) SyncService.listener = null
+        channel?.setMethodCallHandler(null)
+        channel = null
+        worker.shutdown()
+        super.onDestroy()
     }
     @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 — 2026-10-04
+- Windows/Android login now requests only account/password; platform comes from build configuration and device names are automatic. Same-account devices connect automatically; sending defaults to peers.
+- Add Android remoteMessaging foreground service with Keystore-encrypted credentials, a single refresh/socket owner, durable delivery before ACK, paginated offline replay, heartbeat and prompt reconnect on expiry.
+- Quiesce in-flight native token rotation on logout; discard late Flutter refresh results and stale background owner events.
+- Bundle only the public platform CA; retain certificate hostname/IP verification. Deploy loopback TLS gateway and private automatic leaf-certificate renewal, keeping public activation deferred.
+- Add remote Android/JVM build helpers and a pinned official Flutter Windows build kit. Windows exe and native-device acceptance still require their respective host/device.
+- Exclude private TLS files from both Git and Docker contexts.
+- Final validation: 30 backend, 13 Dart, 7 native JVM tests, clean analyzer, Web release, verified HTTPS/WSS restart acceptance, browser login/peer/message checks and ARM64 APK signature/ZIP/assets verification.
+
 ## 0.1.0 — 2026-10-04
 - Phase 1: FastAPI, PostgreSQL, registration/login, Argon2 passwords, JWT, rotating refresh/logout and ownership-aware devices.
 - Phase 2: Authenticated websocket, device presence, heartbeat, session expiry and revocation.

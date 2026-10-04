@@ -8,4 +8,4 @@ flutter build web --release --no-wasm-dry-run
 mkdir -p /home/CrossLink/artifacts/web
 cp -a build/web/. /home/CrossLink/artifacts/web/
 python3 /home/CrossLink/deploy/build-android.py
-cp build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk /home/CrossLink/artifacts/CrossLink-0.1.0-arm64-debug.apk
+cp build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk /home/CrossLink/artifacts/CrossLink-0.2.0-arm64-debug.apk

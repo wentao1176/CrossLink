@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -12,7 +13,11 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() {
     HttpOverrides.global = null;
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     SharedPreferences.setMockInitialValues({});
+  });
+  tearDown(() {
+    debugDefaultTargetPlatformOverride = null;
   });
   test('socket loss during a slow pending pull still reconnects', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -41,6 +46,8 @@ void main() {
         request.response.write(
           '{"access_token":"access","refresh_token":"refresh","device_id":"receiver"}',
         );
+      } else if (request.uri.path == '/api/v1/devices') {
+        request.response.write('[{"id":"receiver","online":true}]');
       } else if (request.uri.path == '/api/v1/messages/pending') {
         await Future<void>.delayed(const Duration(milliseconds: 1600));
         request.response.write('[]');
@@ -63,6 +70,7 @@ void main() {
       await c.connect();
       await Future<void>.delayed(const Duration(milliseconds: 2300));
       expect(connections, greaterThanOrEqualTo(2));
+      expect(c.devices.single['online'], isTrue);
     } finally {
       await c.shutdown();
       c.dispose();
@@ -157,4 +165,81 @@ void main() {
           );
     }
   });
+  test(
+    'Android start result arriving after logout cannot restore credentials',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final started = Completer<void>();
+      final response = Completer<String>();
+      var persisted = 0;
+      var stopped = 0;
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(
+        const MethodChannel('crosslink/native'),
+        (call) async {
+          if (call.method == 'backgroundStart') {
+            started.complete();
+            return response.future;
+          }
+          if (call.method == 'backgroundStop') stopped++;
+          return null;
+        },
+      );
+      messenger.setMockMethodCallHandler(
+        const MethodChannel('plugins.it_nomads.com/flutter_secure_storage'),
+        (_) async => null,
+      );
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final subscription = server.listen((request) async {
+        await request.drain<void>();
+        request.response.headers.contentType = ContentType.json;
+        request.response.write('{}');
+        await request.response.close();
+      });
+      final c = CrossLinkController();
+      c.endpoint = 'http://127.0.0.1:${server.port}';
+      c.prefs = await SharedPreferences.getInstance();
+      c.api = Api(
+        c.endpoint,
+        onTokens: (_) async {
+          persisted++;
+        },
+        onRevoked: () async {},
+      );
+      c.api!.tokens = {
+        'access_token': 'access',
+        'refresh_token': 'refresh',
+        'device_id': 'phone',
+      };
+      try {
+        final connecting = c.connect();
+        await started.future;
+        await c.logout();
+        response.complete(
+          jsonEncode({
+            'access_token': 'late',
+            'refresh_token': 'late-refresh',
+            'device_id': 'phone',
+          }),
+        );
+        await connecting;
+        expect(c.signedIn, isFalse);
+        expect(persisted, 0);
+        expect(stopped, 1);
+      } finally {
+        c.dispose();
+        await server.close(force: true);
+        await subscription.cancel();
+        messenger.setMockMethodCallHandler(
+          const MethodChannel('crosslink/native'),
+          null,
+        );
+        messenger.setMockMethodCallHandler(
+          const MethodChannel('plugins.it_nomads.com/flutter_secure_storage'),
+          null,
+        );
+      }
+    },
+  );
 }

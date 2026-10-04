@@ -1,34 +1,43 @@
 # Verification record — 2026-10-04
 
-All execution took place via SSH on the aliyun ECS in `/home/CrossLink`.
+All development, builds, caches and execution took place via SSH on aliyun in `/home/CrossLink`. No local source/build artifact was created or downloaded.
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| Backend contracts | 30 tests passed | `server/tests/test_api.py`; account/session/device ownership, replay/ACK/read, multipart/files/retention |
-| Dart behavior | 9 tests passed | Protocol plus real HTTP token-refresh multipart retry, websocket reconnect during slow pending replay, file download/complete SAF URI |
-| Static analysis | Passed, no issues | `flutter analyze` after review fixes |
-| Web release | Built | `client/build/web`, copy in `artifacts/web` |
-| Real PostgreSQL/API | Passed | `deploy/smoke_live.py`; presence, <2s push, file SHA256/ownership, API restart persistence, revocation |
-| Browser UI | Passed | Login, offline send stored for target, live reply displayed in message history, logout; disposable records removed |
-| Android APK | Built and verified | ARM64-only split debug APK, v2 signature, ZIP integrity and matching Flutter engine; `logs/android-build.log`, `logs/apk-verification.log`, `artifacts/SHA256SUMS` |
-| Windows executable | Not built | Linux host; requires Windows Flutter/Visual Studio toolchain |
-| Native device acceptance | Pending | No physical Android/Windows session; OS notifications, actual sharing/save/open and tray require device testing |
+| Backend contracts | 30 passed | `logs/backend-final.log`; ownership, rotating refresh/revocation, receipts, files/retention |
+| Dart behavior | 13 passed | `logs/client-tests-final.log`; account/password-only login, native refresh delegation, late refresh/start rejection, reconnect/presence, multipart retry and full SAF URI |
+| Android transport JVM tests | 7 passed | `logs/native-tests-final.log`; real MockWebServer HTTP/websockets, durable ACK, one rotation, close-before-auth recovery, 501-message drain, revocation, logout/write quiescence and slow-ACK heartbeat |
+| Static analysis | Clean | `logs/client-analysis-final.log` |
+| Web release | Built | `client/build/web`, `artifacts/web`, `logs/web-build.log` |
+| HTTPS/WSS real platform | Passed | `logs/tls-live.log`; bundled CA verified, real PostgreSQL, two-device presence, <2s clipboard delivery, multipart/SHA256/ownership, restart persistence, revocation |
+| Browser UI | Passed | Only username/password, automatic live connection and same-account online PC discovery, incoming message displayed/ACKed, no endpoint in settings, logout. Disposable account/rows/credentials removed. |
+| Android 0.2.0 APK | Built and verified | Final rebuild 98.2 seconds; v2 signature, ZIP integrity, ARM64-only Flutter engine, bundled public CA and native service/permission verified |
+| Windows build kit | Prepared | Official Flutter 3.47.6 Git tag resolves to pinned commit; PowerShell parser passed. Package only committed source, public CA and internal endpoint config. No Windows exe built on Linux. |
+| Native-device acceptance | Pending | Actual Windows tray/notifications and Android FGS/permissions/SAF behavior need the relevant host/device. JVM/channel-boundary tests are not physical-device tests. |
 
-## Source review
-A separate read-only reviewer found six defects and confirmed their closure in the final source diff: reconnect starvation, replaying finalized multipart, stale incoming transfer history, missing original message/hash metadata, incomplete Android content URI, and cross-account device UUID reuse. Added behavior regressions cover the network and save boundary fixes. Native save is mocked only at the platform channel boundary; this is not a physical-device test.
+## Review closure
 
-## Deployment
-Dedicated systemd API/database services are enabled. API binds `127.0.0.1:8765`; PostgreSQL binds `127.0.0.1:55432`. No security group, firewall, domain or public TLS configuration was enabled. Single websocket worker. Existing unrelated applications remain in place.
+An independent read-only reviewer confirmed closure of login, TLS, packaging and native session lifecycle findings. Private TLS files are excluded from Docker contexts and Git. Native replay now drains full pages, handles close-before-auth promptly, saves messages before ACK, keeps one refresh owner, and quiesces pending refresh saves before explicit logout clears credentials. Durable store writes check the owning session atomically; Flutter rejects stale refresh/start results and obsolete native owner events. A final slow-ACK RED/GREEN regression moved network receipts/replay off the heartbeat scheduler.
 
-`deploy/migrations/001_transfer_message_id.sql` was applied to the existing PostgreSQL schema; it adds a nullable foreign key and backfills matching historical file messages. No project data was reset.
+The browser found initially stale own-device presence after authentication; device list refresh now runs after authenticated connection and is covered by the existing network regression. Settings reflect version 0.2.0 and native background reception.
 
-## Remaining acceptance limits
-This is a development MVP. Android foreground service/OS background survival, production signing, Windows binary, domain/TLS, and physical-device acceptance remain future work. Browser credentials stay in memory. The local publisher is single-worker; Redis/multi-worker, chunks/resume, OSS, automatic clipboard, P2P and E2EE are deferred per the roadmap. Native PostgreSQL is the distribution-provided 13.23; the unexecuted Compose alternative targets 16.
+## Deployment and limits
 
-## Final artifact
-`artifacts/CrossLink-0.1.0-arm64-debug.apk`: 95,592,745 bytes, version 0.1.0 (split version code 2001), minSdk 24, targetSdk 36, only `arm64-v8a` libraries.
-SHA256: `290bac816794f79affd36e24fdfb21a0ab06e09fd1999e0b2ec29628f1e4bfe6`.
+Dedicated API/database/TLS gateway services and certificate-renewal timer are enabled. API: `127.0.0.1:8765`; PostgreSQL: `127.0.0.1:55432`; TLS gateway: `127.0.0.1:8443`. No security-group/firewall/public listener changes. Public listener example is saved but not activated. Native external connection therefore remains unavailable until later public activation.
 
-Final full runs: 30 backend tests passed (one third-party Starlette/AnyIO deprecation warning), 9 Dart tests passed, real PostgreSQL/websocket/file/restart/revocation checks passed and cleaned their disposable rows. Services remain active and enabled, with loopback listeners only. Native device acceptance is still pending.
+The Android package uses a development signature and ARM64-only split packaging, minSdk 24, targetSdk 36. Production signing and actual OS/phone acceptance remain pending. Windows requires a Windows/C++ build host. Privileged automatic C++ installation script creation was rejected by automatic review with only "blocked by policy" given; the replacement script uses an existing C++ toolchain and does not elevate.
 
-Build resource evidence: uncapped Gradle triggered kernel OOM; an 850 MiB build cgroup with existing swap avoided global OOM. D8 then hit the 256 MiB metaspace cap, raised to 512 MiB. The saved helper subsequently built successfully. Final packaging uses `--split-per-abi --target-platform android-arm64`, excluding incompatible plugin-only architectures. Source/behavior tests were not rerun after this packaging-only flag change; APK signing, ZIP and ABI checks were rerun on the final binary.
+Root/server TLS private keys stay on the ECS. Only the public root is bundled, and IP/hostname validation remains enabled. Leaf certificate renewal is automatic; its actual systemd oneshot finished successfully with a valid-certificate no-op. The JVM tests use HTTP locally; the real deployment acceptance uses verified HTTPS/WSS.
+
+This remains the design document MVP: single websocket worker, native PostgreSQL 13.23, manual clipboard, 100 MiB files, seven-day retention. Redis fanout, resume/chunks, OSS, automatic clipboard, P2P, E2EE, email verification and password recovery are deferred. The alternative Docker/PostgreSQL 16 Compose template is not running.
+
+## Build resource evidence
+
+APK/JVM builds are isolated under an 850 MiB resident/2800 MiB memory-plus-swap cgroup, use existing swap, one Gradle worker and a 512 MiB JVM heap/metaspace. Existing unrelated services are not modified. The first 0.2.0 APK build took 553 seconds; the final incremental rebuild took 98.2 seconds.
+
+## Final artifacts
+
+CrossLink-0.2.0-arm64-debug.apk: 121719745 bytes; version 0.2.0, split version code 2002, minSdk 24, targetSdk 36, only arm64-v8a.
+SHA256: 17a6c943f37411b827fcf399e4ac78d4c95a9bcfbc43bb815c0c00beaa600718.
+
+Windows source build kit is packaged from the recorded Git revision, contains public CA and internal HTTPS configuration, and is checked for ZIP integrity and absence of private keys. Checksums for both packages are in artifacts/SHA256SUMS. No Windows executable or physical-device acceptance is claimed.

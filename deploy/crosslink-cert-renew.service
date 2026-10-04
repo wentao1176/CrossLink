@@ -1,0 +1,11 @@
+[Unit]
+Description=CrossLink platform certificate renewal
+After=crosslink-gateway.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/CrossLink/deploy/renew-platform-cert.py
+User=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/CrossLink/.tools/tls /home/CrossLink/deploy/platform_tls

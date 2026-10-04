@@ -8,6 +8,7 @@ import time
 
 root = Path(__file__).resolve().parents[1]
 assert root == Path('/home/CrossLink'), 'Run the SSH build from /home/CrossLink'
+assert (root / '.tools/client-build.json').is_file(), 'Internal platform build configuration is required'
 cgroup = None
 controller = Path('/sys/fs/cgroup/memory')
 if os.geteuid() == 0 and (controller / 'memory.limit_in_bytes').is_file():
@@ -24,7 +25,7 @@ def constrain():
 
 try:
     result = subprocess.run(
-        ['flutter', 'build', 'apk', '--debug', '--split-per-abi', '--target-platform', 'android-arm64'],
+        ['flutter', 'build', 'apk', '--debug', '--split-per-abi', '--target-platform', 'android-arm64', '--dart-define-from-file=' + str(root / '.tools/client-build.json')],
         cwd=root / 'client', preexec_fn=constrain if cgroup else None,
     ).returncode
 finally:

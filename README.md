@@ -1,66 +1,58 @@
 # CrossLink
 
-跨设备文件、文字、剪贴板、链接和通知同步。根据 `docs/DEVELOPMENT_DESIGN.md` 实现首版 MVP，共用 Flutter 客户端 + FastAPI + PostgreSQL。
+跨设备文件、文字、剪贴板、链接和通知同步。根据用户开发设计文档实现 Flutter Windows/Android 客户端、浏览器预览，以及 FastAPI/PostgreSQL 中转平台。
 
-所有源码、工具缓存、数据和产物在阿里云 `/home/CrossLink`。只通过 SSH 操作；当前未开放公网服务、安全组或修改已有项目。
+全部开发、构建、缓存和产物在阿里云 `/home/CrossLink`，通过 SSH 操作。
 
-## 现在如何使用
+## App 的使用方式
 
-Windows PowerShell 运行 SSH 隧道（保持这个终端打开；禁用配置中的远程代理转发）：
+Windows 和 Android 登录页仅填写用户名、密码；设备名称自动读取，平台地址在构建时内置。登录后自动连接、显示同账号设备。默认发送给该账号其他设备，也可选定目标。服务器在后台中转，用户无需配对、输入地址或选择服务器。注册另需邮箱。
+
+Android 使用 remoteMessaging 前台服务维持后台连接，关闭界面不等于退出登录。凭据通过 Android Keystore 加密保存在应用私有目录；后台统一负责刷新 Token、补收离线消息、保存后 ACK 和通知。退出登录会停止服务并清除凭据。Android 系统强行停止、厂商省电限制、用户拒绝通知的实际表现仍需实机验证。剪贴板目前手动发送/复制，文件最大 100 MiB。
+
+Windows 源码包含托盘、关闭窗口驻留、通知、文件选择和剪贴板。Linux ECS 无法编译 Flutter Windows exe；`artifacts/CrossLink-0.2.0-windows-build-kit.zip` 提供源码、内置平台配置和一键构建脚本。需要 Windows、Git、Visual Studio C++ 工具链，解压后执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy/build-windows.ps1
+```
+
+脚本将工具放在包内 `.tools`，校验官方 Flutter 3.47.6 的固定 Git 提交，分析、测试并构建完整 Windows ZIP。它不会提权或安装 C++ 编译器。该 ZIP 是构建包，不能当作现成 exe 安装。
+
+Android 测试包：`artifacts/CrossLink-0.2.0-arm64-debug.apk`，开发签名、ARM64、minSdk 24。构建包和 APK 的校验值见 `artifacts/SHA256SUMS`。
+
+## 平台连接状态
+
+原生 App 已内置 HTTPS 平台地址，并携带平台公开 CA；证书的 IP/主机名校验保持启用，私钥仅在服务器。无需购买或填写域名。
+
+API、PostgreSQL、TLS 网关服务已经部署；TLS 网关当前仅监听 `127.0.0.1:8443`，代理到 API 的 `127.0.0.1:8765`。数据库仅监听 `127.0.0.1:55432`。按用户此前要求，未开放安全组、防火墙或公网监听。因此原生 App 的内置公网连接在后续开放前尚不能从外部使用；服务功能可通过 SSH 隧道验证。公开监听样例已准备，尚未启用。
+
+浏览器预览通过 SSH 隧道：
 
 ```powershell
 ssh -F NUL -N -L 127.0.0.1:18765:127.0.0.1:8765 root@47.116.203.177
 ```
 
-浏览器访问 `http://127.0.0.1:18765`，注册账号并登录。浏览器自动使用当前站点地址；客户端可在登录页配置服务器地址。原生客户端使用 HTTPS 公网地址，或者 `http://127.0.0.1:8765` SSH/ADB 隧道。连接同账号的另一台设备后选择目标，发送文字、剪贴板或文件；离线消息在重新连接时补收。
+打开 `http://127.0.0.1:18765`；浏览器也只需账号密码，自动使用页面所在平台。
 
-Android 安装包位于 `artifacts/CrossLink-0.1.0-arm64-debug.apk`（开发测试签名，ARM64，最低声明 Android 7 / API 24；SHA256 见 `artifacts/SHA256SUMS`）。服务器侧下载方式可用 `scp`，本次开发没有把产物下载到本地。公网 HTTPS 未启用前，实机可通过电脑的 SSH 隧道与 `adb reverse tcp:8765 tcp:18765` 接入，再配置 `http://127.0.0.1:8765`。APK 不内置服务器地址。
-
-Windows 需要 Windows 上的 Flutter 和 Visual Studio C++ 工具链编译（Linux ECS 无法生成 Windows exe）：
-
-```powershell
-cd client
-flutter pub get
-flutter build windows --release
-```
-
-Windows 启动后关闭窗口会驻留托盘，托盘菜单可打开、发文件、发剪贴板或退出。Android 支持系统分享、前台实时消息、通知和系统文件保存；未实现后台 foreground service/厂商保活，应用退出后会在下次连接补收。默认只手动发送剪贴板。客户端本地缓存最近 100 条消息（SharedPreferences），原生 Token 在系统 SecureStorage；浏览器 Token 只在内存，刷新页面后重新登录。
-
-## 服务器服务
+## 运维和验证
 
 ```bash
 ssh -o ClearAllForwardings=yes aliyun
 cd /home/CrossLink
-systemctl status crosslink-api crosslink-postgres
-curl http://127.0.0.1:8765/health
-journalctl -u crosslink-api -n 50 --no-pager
-```
-
-API 专用账户 crosslink，PostgreSQL 专用账户 postgres；API 仅 `127.0.0.1:8765`，独立数据库仅 `127.0.0.1:55432`。数据在 `data/postgres`、`data/files`；随机密钥在 `.env`，Git 忽略。系统软件包和 `/etc/systemd/system` 两个必要服务定义由操作系统管理，业务代码和数据均在项目目录。当前发行版提供 PostgreSQL 13.23；Compose 模板使用 PostgreSQL 16，未来正式公网部署时可迁移到受支持新版。
-
-验证：
-
-```bash
-cd /home/CrossLink/server
-/home/CrossLink/.venv/bin/python -m pytest -q
-cd /home/CrossLink/client
-source /home/CrossLink/deploy/flutter-env.sh
+systemctl status crosslink-api crosslink-postgres crosslink-gateway
+curl --cacert client/assets/platform_ca.pem https://127.0.0.1:8443/health
+source deploy/flutter-env.sh
+cd client
 flutter analyze
 flutter test
-cd /home/CrossLink
-CROSSLINK_RESTART_TEST=1 .venv/bin/python deploy/smoke_live.py
+cd ..
+python3 deploy/test-android.py
+cd server
+../.venv/bin/python -m pytest -q
 ```
 
-最后一条会短暂重启 CrossLink API，创建并清理专属测试账户，验证真实 PostgreSQL、双设备 websocket、2 秒内推送、文件/权限、重启持久化和撤销 Token。
+`deploy/smoke_live.py` 验证真实 PostgreSQL、两设备发现/推送、文件哈希、权限、撤销和重启持久化，并清理测试账户。API 保持单 worker。证书续期定时器由平台私有 CA 续签叶证书，公开 CA 无需随每次续期变更。
 
-重新构建 `bash deploy/build-clients.sh` 后 `systemctl restart crosslink-api` 更新 Web。构建缓存在 `.tools`，日志在 `logs`。这台 2 GB ECS 的 APK 构建用 `deploy/build-android.py` 约束独立构建进程的内存，使用现有 swap；不修改其他服务或全局内存设置。服务开机自动启动，支持失败重启。上传失败/取消清理半成品，文件到期每小时清理，启动时也清理；不代表备份。
+`bash deploy/build-clients.sh` 重新构建 Web 和 Android。小内存 ECS 的 JVM 构建单独限制内存、使用现有 swap。生产数据在 `data`，私钥、平台构建配置、Token 和日志不进入源码包。Docker Compose 是未启动的替代模板；当前使用专用 systemd 服务。
 
-## 部署与后续
-
-`deploy/crosslink-*.service` 是当前 native 部署；`docker-compose.yml` 是替代方案模板，尚未启动 Docker。使用 Compose 前安装 Docker、停止 native 服务，填写 `.env` 中 POSTGRES_PASSWORD/JWT_SECRET，构建 Web，运行 `docker compose up -d --build`；原生 PostgreSQL 数据与 Docker 数据卷不能直接互用，应 pg_dump/pg_restore 迁移。
-
-`deploy/nginx.conf.example` 是未来 HTTPS 配置，需确定域名、证书后才启用，之后再讨论安全组 443。当前没有域名、TLS、公开注册入口或 Redis 多进程消息总线。账号没有邮箱验证、找回密码、验证码功能；MVP 为自用测试版。首次启动创建 schema；本轮已有数据库已应用 `deploy/migrations/001_transfer_message_id.sql`，保留历史记录并补齐传输消息关联。后续 schema 变更应引入正式迁移工具。
-
-下一阶段：Windows 构建与实机验收、Android 后台稳定性与正式签名、公网 HTTPS；之后再按路线做分片续传、OSS、自动剪贴板。
-
-验收记录和限制见 `docs/VERIFICATION.md`。
+本版保留设计文档中的后续功能：分片续传、OSS、自动剪贴板、P2P、E2EE、Redis 多 worker，以及邮箱验证/密码找回。Windows 二进制、实机后台稳定性和正式签名仍需相应环境验收。具体测试证据见 `docs/VERIFICATION.md`。

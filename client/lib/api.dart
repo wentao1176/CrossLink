@@ -3,7 +3,12 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 
 class Api {
-  Api(this.endpoint, {required this.onTokens, required this.onRevoked}) {
+  Api(
+    this.endpoint, {
+    required this.onTokens,
+    required this.onRevoked,
+    this.refreshProvider,
+  }) {
     dio = Dio(
       BaseOptions(
         baseUrl: '$endpoint/api/v1',
@@ -48,9 +53,19 @@ class Api {
   }
   final String endpoint;
   late final Dio dio;
-  Map<String, dynamic>? tokens;
+  Map<String, dynamic>? _tokens;
+  int _sessionGeneration = 0;
+  bool _closed = false;
+  Map<String, dynamic>? get tokens => _tokens;
+  set tokens(Map<String, dynamic>? value) {
+    ++_sessionGeneration;
+    _tokens = value;
+  }
+
   final Future<void> Function(Map<String, dynamic>) onTokens;
   final Future<void> Function() onRevoked;
+  final Future<Map<String, dynamic>> Function(Map<String, dynamic>)?
+  refreshProvider;
   Future<void>? _refreshing;
   Future<void> accept(Map<String, dynamic> value) async {
     tokens = value;
@@ -68,6 +83,13 @@ class Api {
   }
 
   Future<void> _performRefresh() async {
+    final generation = _sessionGeneration;
+    if (refreshProvider != null) {
+      final next = await refreshProvider!(Map.of(tokens!));
+      if (_closed || generation != _sessionGeneration) return;
+      await accept(next);
+      return;
+    }
     final raw = Dio(
       BaseOptions(
         baseUrl: '$endpoint/api/v1',
@@ -80,9 +102,12 @@ class Api {
         '/auth/refresh',
         data: {'refresh_token': tokens?['refresh_token']},
       );
+      if (_closed || generation != _sessionGeneration) return;
       await accept(Map<String, dynamic>.from(response.data));
     } on DioException catch (e) {
-      if (e.response?.statusCode == 401) {
+      if (e.response?.statusCode == 401 &&
+          !_closed &&
+          generation == _sessionGeneration) {
         tokens = null;
         await onRevoked();
       }
@@ -99,7 +124,11 @@ class Api {
         .toList();
   }
 
-  void close() => dio.close(force: true);
+  void close() {
+    _closed = true;
+    ++_sessionGeneration;
+    dio.close(force: true);
+  }
 }
 
 String userError(Object error) {
@@ -108,8 +137,8 @@ String userError(Object error) {
     if (error.response?.data is Map) {
       return error.response!.data['message']?.toString() ?? '请求失败';
     }
-    return '连接失败，请检查服务器地址与网络，稍后重试';
+    return '暂时无法连接平台，请检查网络后重试';
   }
   if (error is FormatException) return error.message.toString();
-  return '操作失败：$error';
+  return '操作暂时无法完成，请稍后重试';
 }

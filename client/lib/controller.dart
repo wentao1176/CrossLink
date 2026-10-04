@@ -43,7 +43,7 @@ class CrossLinkController extends ChangeNotifier {
       disposed = false,
       _connecting = false,
       _pulling = false;
-  int attempts = 0, _generation = 0;
+  int attempts = 0, _generation = 0, _sessionGeneration = 0;
   double? progress;
   CancelToken? cancelToken;
   bool get signedIn => api?.tokens != null;
@@ -57,40 +57,16 @@ class CrossLinkController extends ChangeNotifier {
 
   Future<void> initialize() async {
     try {
+      await native.initializePlatformTrust();
       prefs = await SharedPreferences.getInstance();
-      endpoint =
-          prefs.getString('endpoint') ??
-          const String.fromEnvironment('CROSSLINK_API_URL');
-      if (endpoint.isEmpty && kIsWeb) endpoint = Uri.base.origin;
+      endpoint = kIsWeb
+          ? Uri.base.origin
+          : const String.fromEnvironment('CROSSLINK_API_URL');
+      await prefs.remove('endpoint');
       deviceUuid = prefs.getString('device_uuid') ?? const Uuid().v4();
       await prefs.setString('device_uuid', deviceUuid);
-      deviceName =
-          prefs.getString('device_name') ??
-          (windows
-              ? 'Windows PC'
-              : android
-              ? 'Android 手机'
-              : '浏览器');
-      if (!kIsWeb) {
-        final saved = await storage.read(key: 'crosslink_session');
-        if (saved != null) {
-          final value = Map<String, dynamic>.from(jsonDecode(saved));
-          if (value['endpoint'] == endpoint) {
-            _setupApi();
-            api!.tokens = Map<String, dynamic>.from(value['tokens']);
-            deviceId = api!.tokens!['device_id'];
-            _loadCache();
-            try {
-              await api!.refresh();
-              await reload();
-              await connect();
-            } catch (e) {
-              error = userError(e);
-              _scheduleReconnect();
-            }
-          }
-        }
-      }
+      deviceName = prefs.getString('device_name') ?? await bridge.deviceName();
+      bridge.onBackground = _handleBackground;
       bridge.onShare = (value) async {
         if (value['error'] != null) {
           error = value['error'];
@@ -109,6 +85,36 @@ class CrossLinkController extends ChangeNotifier {
       } catch (e) {
         error = '系统集成功能暂不可用：${userError(e)}';
       }
+      if (!kIsWeb) {
+        final nativeSession = android
+            ? await bridge.backgroundSnapshot()
+            : null;
+        final saved = nativeSession == null
+            ? await storage.read(key: 'crosslink_session')
+            : jsonEncode(nativeSession);
+        if (saved != null) {
+          final value = Map<String, dynamic>.from(jsonDecode(saved));
+          if (value['endpoint'] == endpoint) {
+            _setupApi();
+            api!.tokens = Map<String, dynamic>.from(value['tokens']);
+            deviceId = api!.tokens!['device_id'];
+            _loadCache();
+            try {
+              if (android) {
+                await connect();
+                await reload();
+              } else {
+                await api!.refresh();
+                await reload();
+                await connect();
+              }
+            } catch (e) {
+              error = userError(e);
+              _scheduleReconnect();
+            }
+          }
+        }
+      }
     } catch (e) {
       error = userError(e);
     } finally {
@@ -119,9 +125,26 @@ class CrossLinkController extends ChangeNotifier {
 
   void _setupApi() {
     api?.close();
+    final sessionGeneration = ++_sessionGeneration;
     api = Api(
       endpoint,
+      refreshProvider: android
+          ? (tokens) async {
+              try {
+                return await bridge.refreshBackground(tokens);
+              } on PlatformException catch (e) {
+                if (e.code == 'SESSION_REVOKED' &&
+                    sessionGeneration == _sessionGeneration) {
+                  await _clearSession();
+                  error = '登录已失效，请重新登录';
+                  update();
+                }
+                rethrow;
+              }
+            }
+          : null,
       onTokens: (tokens) async {
+        if (disposed || sessionGeneration != _sessionGeneration) return;
         deviceId = tokens['device_id'];
         if (!kIsWeb) {
           await storage.write(
@@ -131,6 +154,7 @@ class CrossLinkController extends ChangeNotifier {
         }
       },
       onRevoked: () async {
+        if (sessionGeneration != _sessionGeneration) return;
         await _clearSession();
         error = '登录已失效，请重新登录';
         update();
@@ -138,20 +162,18 @@ class CrossLinkController extends ChangeNotifier {
     );
   }
 
-  Future<void> login(
-    String account,
-    String password,
-    String server,
-    String name, {
-    String? email,
-  }) async {
+  Future<void> login(String account, String password, {String? email}) async {
     await run(() async {
-      endpoint = normalizeEndpoint(server);
-      deviceName = name.trim();
+      try {
+        endpoint = normalizeEndpoint(endpoint);
+      } on FormatException {
+        throw const FormatException('平台暂时无法连接，请稍后重试');
+      }
+      if (deviceName.isEmpty) deviceName = await bridge.deviceName();
       final identityKey = deviceProfileKey(endpoint, account);
       deviceUuid = prefs.getString(identityKey) ?? const Uuid().v4();
-      if (deviceName.isEmpty) throw const FormatException('请输入设备名称');
       await shutdown();
+      if (android) await bridge.stopBackground();
       _setupApi();
       if (email != null) {
         await api!.dio.post<dynamic>(
@@ -177,13 +199,12 @@ class CrossLinkController extends ChangeNotifier {
                 : windows
                 ? 'windows'
                 : 'web',
-            'app_version': '0.1.0',
+            'app_version': '0.2.0',
           },
         },
       );
       await api!.accept(Map<String, dynamic>.from(response.data));
       await prefs.setString(identityKey, deviceUuid);
-      await prefs.setString('endpoint', endpoint);
       await prefs.setString('device_name', deviceName);
       _loadCache();
       await reload();
@@ -261,6 +282,29 @@ class CrossLinkController extends ChangeNotifier {
 
   Future<void> connect() async {
     if (!signedIn || disposed) return;
+    if (android) {
+      try {
+        connection = '连接中';
+        update();
+        final activeApi = api!;
+        final sessionGeneration = _sessionGeneration;
+        final next = await bridge.startBackground(endpoint, activeApi.tokens!);
+        if (disposed ||
+            !signedIn ||
+            sessionGeneration != _sessionGeneration ||
+            api != activeApi) {
+          return;
+        }
+        await activeApi.accept(next);
+        await pullPending();
+      } catch (e) {
+        error = userError(e);
+        connection = '离线 · 自动重连';
+        _scheduleReconnect();
+      }
+      update();
+      return;
+    }
     if (_connecting) {
       _scheduleReconnect();
       return;
@@ -324,6 +368,7 @@ class CrossLinkController extends ChangeNotifier {
         }
       });
       await pullPending();
+      devices = await api!.list('/devices');
       update();
     } catch (e) {
       error = userError(e);
@@ -333,6 +378,41 @@ class CrossLinkController extends ChangeNotifier {
     } finally {
       _connecting = false;
     }
+  }
+
+  Future<void> _handleBackground(Map<String, dynamic> value) async {
+    if (disposed ||
+        !signedIn ||
+        value['owner'] != api!.tokens!['_native_owner']) {
+      return;
+    }
+    final kind = value['type'];
+    if (kind == 'session.revoked') {
+      await _clearSession();
+      error = '登录已失效，请重新登录';
+    } else if (kind == 'session.updated' && signedIn) {
+      await api!.accept(Map<String, dynamic>.from(value['tokens']));
+    } else if (kind == 'auth_ok') {
+      attempts = 0;
+      retry?.cancel();
+      connection = '实时连接';
+      await reload();
+    } else if (kind == 'offline') {
+      connection = '离线 · 自动重连';
+    } else if (signedIn) {
+      final event = value['event']?.toString() ?? '';
+      if ([
+        'message.created',
+        'clipboard.updated',
+        'file.created',
+        'notification.created',
+      ].contains(event)) {
+        await _receive(Map<String, dynamic>.from(value['data']));
+      } else if (event.startsWith('device.')) {
+        devices = await api!.list('/devices');
+      }
+    }
+    update();
   }
 
   Future<void> _handleSocket(dynamic raw, Completer<void> authorized) async {
@@ -370,7 +450,7 @@ class CrossLinkController extends ChangeNotifier {
     final receipt = await api!.dio.post<dynamic>('/messages/${m['id']}/ack');
     cache.put({...m, 'status': receipt.data['status']});
     await _saveCache();
-    if (fresh) {
+    if (fresh && !android) {
       final payload = Map<String, dynamic>.from(m['payload']);
       try {
         await bridge.notify(
@@ -593,7 +673,10 @@ class CrossLinkController extends ChangeNotifier {
   }
 
   Future<void> _clearSession() async {
+    ++_sessionGeneration;
+    api?.tokens = null;
     await shutdown();
+    if (android) await bridge.stopBackground();
     if (!kIsWeb) await storage.delete(key: 'crosslink_session');
     api?.tokens = null;
     cache.clear();
