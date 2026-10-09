@@ -81,90 +81,109 @@ void main() {
       await subscription.cancel();
     }
   });
-  test('download fetches uncached receipt, verifies hash and preserves complete Android URI', () async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.android;
-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    var completed = 0, read = 0, saveCalls = 0;
-    const saved =
-        'content://com.android.externalstorage.documents/document/primary%3ADownload%2Fhello.txt';
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(const MethodChannel('crosslink/native'), (
-          call,
-        ) async {
-          if (call.method == 'saveFile') {
-            saveCalls++;
-            expect(call.arguments['name'], 'hello.txt');
-            expect(call.arguments['bytes'], utf8.encode('hello'));
-            return saved;
+  for (final cancelled in [false, true]) {
+    test(
+      cancelled
+          ? 'cancelled save clears temporary data and sends no completion or read receipt'
+          : 'download fetches uncached receipt, verifies hash and preserves complete Android URI',
+      () async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        var completed = 0, read = 0, saveCalls = 0;
+        String? temporaryPath;
+        const saved =
+            'content://com.android.externalstorage.documents/document/primary%3ADownload%2Fhello.txt';
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(const MethodChannel('crosslink/native'), (
+              call,
+            ) async {
+              if (call.method == 'transferDirectory') {
+                final dir = Directory(
+                  '/home/CrossLink/.tools/test-transfer-cache',
+                );
+                await dir.create(recursive: true);
+                return dir.path;
+              }
+              if (call.method == 'saveFile') {
+                saveCalls++;
+                expect(call.arguments['name'], 'hello.txt');
+                expect(call.arguments['bytes'], isNull);
+                temporaryPath = call.arguments['path'] as String;
+                final temporary = File(temporaryPath!);
+                expect(await temporary.readAsString(), 'hello');
+                return cancelled ? null : saved;
+              }
+              return null;
+            });
+        final subscription = server.listen((request) async {
+          final body = await utf8.decoder.bind(request).join();
+          if (request.uri.path.endsWith('/download')) {
+            request.response.headers.set(
+              'X-File-SHA256',
+              '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+            );
+            request.response.add(utf8.encode('hello'));
+          } else {
+            request.response.headers.contentType = ContentType.json;
+            if (request.method == 'GET' &&
+                request.uri.path == '/api/v1/transfers' &&
+                request.uri.queryParameters['file_id'] == 'file') {
+              request.response.write(
+                '[{"id":"transfer","file_id":"file","target_device_id":"receiver","message_id":"message"}]',
+              );
+            } else if (request.method == 'PATCH') {
+              expect(jsonDecode(body)['status'], 'completed');
+              completed++;
+              request.response.write('{}');
+            } else if (request.uri.path.endsWith('/read')) {
+              read++;
+              request.response.write('{}');
+            } else {
+              request.response.write('[]');
+            }
           }
-          return null;
+          await request.response.close();
         });
-    final subscription = server.listen((request) async {
-      final body = await utf8.decoder.bind(request).join();
-      if (request.uri.path.endsWith('/download')) {
-        request.response.headers.set(
-          'X-File-SHA256',
-          '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
-        );
-        request.response.add(utf8.encode('hello'));
-      } else {
-        request.response.headers.contentType = ContentType.json;
-        if (request.method == 'GET' &&
-            request.uri.path == '/api/v1/transfers' &&
-            request.uri.queryParameters['file_id'] == 'file') {
-          request.response.write(
-            '[{"id":"transfer","file_id":"file","target_device_id":"receiver","message_id":"message"}]',
-          );
-        } else if (request.method == 'PATCH') {
-          expect(jsonDecode(body)['status'], 'completed');
-          completed++;
-          request.response.write('{}');
-        } else if (request.uri.path.endsWith('/read')) {
-          read++;
-          request.response.write('{}');
-        } else {
-          request.response.write('[]');
+        final c = CrossLinkController();
+        c.endpoint = 'http://127.0.0.1:${server.port}';
+        c.deviceId = 'receiver';
+        c.prefs = await SharedPreferences.getInstance();
+        c.api = Api(c.endpoint, onTokens: (_) async {}, onRevoked: () async {});
+        await c.api!.accept({
+          'access_token': 'access',
+          'refresh_token': 'refresh',
+          'device_id': 'receiver',
+        });
+        try {
+          await c.download({
+            'id': 'message',
+            'sender_device_id': 'sender',
+            'payload': {
+              'file_id': 'file',
+              'name': 'hello.txt',
+              'sha256': '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+            },
+          });
+          expect(c.error, isEmpty);
+          expect(c.downloadedPath, cancelled ? null : saved);
+          expect(await File(temporaryPath!).exists(), isFalse);
+          expect(saveCalls, 1);
+          expect(completed, cancelled ? 0 : 1);
+          expect(read, cancelled ? 0 : 1);
+        } finally {
+          c.dispose();
+          await server.close(force: true);
+          await subscription.cancel();
+          debugDefaultTargetPlatformOverride = null;
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(
+                const MethodChannel('crosslink/native'),
+                null,
+              );
         }
-      }
-      await request.response.close();
-    });
-    final c = CrossLinkController();
-    c.endpoint = 'http://127.0.0.1:${server.port}';
-    c.deviceId = 'receiver';
-    c.prefs = await SharedPreferences.getInstance();
-    c.api = Api(c.endpoint, onTokens: (_) async {}, onRevoked: () async {});
-    await c.api!.accept({
-      'access_token': 'access',
-      'refresh_token': 'refresh',
-      'device_id': 'receiver',
-    });
-    try {
-      await c.download({
-        'id': 'message',
-        'sender_device_id': 'sender',
-        'payload': {
-          'file_id': 'file',
-          'name': 'hello.txt',
-          'sha256': '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
-        },
-      });
-      expect(c.error, isEmpty);
-      expect(c.downloadedPath, saved);
-      expect(saveCalls, 1);
-      expect(completed, 1);
-      expect(read, 1);
-    } finally {
-      c.dispose();
-      await server.close(force: true);
-      await subscription.cancel();
-      debugDefaultTargetPlatformOverride = null;
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(
-            const MethodChannel('crosslink/native'),
-            null,
-          );
-    }
-  });
+      },
+    );
+  }
   test(
     'Android start result arriving after logout cannot restore credentials',
     () async {

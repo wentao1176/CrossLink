@@ -25,7 +25,7 @@ class MainActivity : FlutterActivity() {
     private var channel: MethodChannel? = null
     private var pendingShare: Map<String, Any>? = null
     private var saveResult: MethodChannel.Result? = null
-    private var saveBytes: ByteArray? = null
+    private var saveInput: File? = null
     private val worker = Executors.newSingleThreadExecutor()
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
@@ -131,7 +131,14 @@ class MainActivity : FlutterActivity() {
                 }
                 "deviceName" -> result.success("${Build.MANUFACTURER} ${Build.MODEL}")
                 "getInitialShare" -> { result.success(pendingShare); pendingShare = null }
-                "clearShares" -> { File(cacheDir, "crosslink-shares").listFiles()?.forEach { it.delete() }; result.success(null) }
+                "clearShares" -> {
+                    val directory=File(cacheDir,"crosslink-shares").canonicalFile
+                    call.argument<List<String>>("paths")?.forEach { path ->
+                        val file=File(path).canonicalFile
+                        if(file.parentFile==directory && file.name.matches(Regex("[a-f0-9-]{36}")))file.delete()
+                    }
+                    result.success(null)
+                }
                 "requestNotifications" -> {
                     if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                         requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 102)
@@ -142,16 +149,23 @@ class MainActivity : FlutterActivity() {
                     try { notifyUser(call.argument<String>("title") ?: "CrossLink", call.argument<String>("content") ?: "收到新内容"); result.success(null) }
                     catch (e: Exception) { result.error("NOTIFICATION_FAILED", "Unable to display notification", null) }
                 }
+                "transferDirectory" -> {
+                    val directory=File(cacheDir,"crosslink-transfers")
+                    if(directory.exists() || directory.mkdirs()) result.success(directory.absolutePath)
+                    else result.error("TEMP_DIRECTORY","Unable to create temporary directory",null)
+                }
                 "saveFile" -> {
                     if (saveResult != null) { result.error("SAVE_BUSY", "A save dialog is already open", null) }
                     else {
                         saveResult = result
-                        saveBytes = call.argument<ByteArray>("bytes")
                         try {
-                            require(saveBytes != null && saveBytes!!.size <= 104857600)
+                            val input=File(call.argument<String>("path") ?: "").canonicalFile
+                            val directory=File(cacheDir,"crosslink-transfers").canonicalFile
+                            require(input.parentFile==directory && input.name.matches(Regex("crosslink-[a-f0-9-]{36}\\.part")) && input.isFile && input.length()<=104857600)
+                            saveInput=input
                             val save = Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(call.argument<String>("mime_type") ?: "application/octet-stream").putExtra(Intent.EXTRA_TITLE, call.argument<String>("name") ?: "file")
                             startActivityForResult(save, 4102)
-                        } catch (e: Exception) { saveResult = null; saveBytes = null; result.error("SAVE_FAILED", "Unable to open save dialog", null) }
+                        } catch (e: Exception) { saveResult = null; saveInput = null; result.error("SAVE_FAILED", "Unable to open save dialog", null) }
                     }
                 }
                 "openFile" -> {
@@ -170,6 +184,8 @@ class MainActivity : FlutterActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus); clipboardBridge?.focus(hasFocus) }
     override fun onDestroy() {
         clipboardBridge?.dispose(); clipboardBridge = null
+        saveResult?.error("SAVE_CANCELLED","Activity closed before save completed",null)
+        saveResult=null;saveInput=null
         if (SyncService.listener === eventListener) SyncService.listener = null
         channel?.setMethodCallHandler(null)
         channel = null
@@ -180,15 +196,24 @@ class MainActivity : FlutterActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode != 4102) { super.onActivityResult(requestCode, resultCode, data); return }
         val result = saveResult ?: return
-        val bytes = saveBytes
-        saveResult = null; saveBytes = null
+        val input = saveInput
+        saveResult = null; saveInput = null
         val uri = data?.data
-        if (resultCode != android.app.Activity.RESULT_OK || uri == null || bytes == null) { result.success(null); return }
+        if (resultCode != android.app.Activity.RESULT_OK || uri == null || input == null) { result.success(null); return }
         worker.execute {
             try {
-                contentResolver.openOutputStream(uri, "w")?.use { it.write(bytes) } ?: throw IllegalArgumentException("Unable to write selected file")
+                contentResolver.openOutputStream(uri,"w")?.use { output ->
+                    input.inputStream().use { source ->
+                        val buffer=ByteArray(65536);var total=0L
+                        while(true){val count=source.read(buffer);if(count<0)break;total+=count;require(total<=104857600);output.write(buffer,0,count)}
+                    }
+                } ?: throw IllegalArgumentException("Unable to write selected file")
+                try { contentResolver.takePersistableUriPermission(uri,(data?.flags ?: 0) and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)) } catch(_:SecurityException) {}
                 runOnUiThread { result.success(uri.toString()) }
-            } catch (e: Exception) { runOnUiThread { result.error("SAVE_FAILED", "Unable to save selected file", null) } }
+            } catch (e: Exception) {
+                try { android.provider.DocumentsContract.deleteDocument(contentResolver,uri) } catch(_:Exception) {}
+                runOnUiThread { result.error("SAVE_FAILED", "Unable to save selected file", null) }
+            }
         }
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); receiveShare(intent) }
@@ -199,6 +224,7 @@ class MainActivity : FlutterActivity() {
         val uris = if (intent.action == Intent.ACTION_SEND_MULTIPLE) intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM) ?: arrayListOf()
                    else arrayListOf<Uri>().also { intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let(it::add) }
         worker.execute {
+            val created=mutableListOf<File>()
             try {
                 require(uris.size <= 20)
                 val directory = File(cacheDir, "crosslink-shares"); directory.mkdirs()
@@ -217,12 +243,14 @@ class MainActivity : FlutterActivity() {
                             }
                         } ?: throw IllegalArgumentException("Unreadable shared file")
                     } catch (e: Exception) { local.delete(); throw e }
+                    created.add(local)
                     mapOf("path" to local.absolutePath, "name" to name)
                 }
                 val share = mutableMapOf<String, Any>("files" to files)
                 if (text != null) share["text"] = text
                 runOnUiThread { pendingShare = share; channel?.invokeMethod("share", share) }
             } catch (e: Exception) {
+                created.forEach { it.delete() }
                 runOnUiThread { channel?.invokeMethod("share", mapOf("error" to "分享文件读取失败：单个文件最大 100 MB，最多 20 个文件")) }
             }
         }

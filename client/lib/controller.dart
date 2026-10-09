@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
-import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -14,6 +13,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'api.dart';
 import 'clipboard_sync.dart';
+import 'file_transfer.dart' as transfer;
 import 'protocol.dart';
 import 'platform_bridge.dart';
 import 'native_stub.dart' if (dart.library.io) 'native_io.dart' as native;
@@ -39,6 +39,7 @@ class CrossLinkController extends ChangeNotifier {
   String type = 'text';
   List<Map<String, dynamic>> devices = [], transfers = [], clips = [];
   Map<String, dynamic>? shared;
+  final List<Map<String, dynamic>> fileResults = [];
   bool initializing = true,
       busy = false,
       disposed = false,
@@ -932,31 +933,68 @@ class CrossLinkController extends ChangeNotifier {
     });
   }
 
+  Future<bool> _tryUpload(
+    String name,
+    Future<MultipartFile> Function() create,
+  ) async {
+    final result = <String, dynamic>{'name': name, 'status': 'waiting'};
+    fileResults.add(result);
+    update();
+    if (cancelToken?.isCancelled == true) {
+      result['status'] = 'cancelled';
+      update();
+      return false;
+    }
+    try {
+      final part = await create();
+      if (part.length > transfer.maxFileBytes) {
+        throw const FormatException('文件超过 100 MiB');
+      }
+      result['status'] = 'uploading';
+      update();
+      await _upload(part);
+      result['status'] = 'sent';
+      update();
+      return true;
+    } catch (e) {
+      result['status'] = e is DioException && e.type == DioExceptionType.cancel
+          ? 'cancelled'
+          : 'failed';
+      result['detail'] = userError(e);
+      update();
+      return false;
+    }
+  }
+
   Future<void> pickFiles() async {
     await run(() async {
-      final result = await FilePicker.pickFiles();
-      for (final file in result) {
-        final length = await file.length();
-        if (length == null || length > 100 * 1024 * 1024) {
-          throw const FormatException('文件大小未知或超过 100 MB');
-        }
-        final multipart = MultipartFile.fromStream(
-          file.readAsByteStream,
-          length,
-          filename: file.name,
-        );
-        await _upload(multipart);
+      final files = await FilePicker.pickFiles();
+      fileResults.clear();
+      for (final file in files) {
+        await _tryUpload(file.name, () async {
+          final length = await file.length();
+          if (length == null || length > transfer.maxFileBytes) {
+            throw const FormatException('文件大小未知或超过 100 MiB');
+          }
+          return MultipartFile.fromStream(
+            file.readAsByteStream,
+            length,
+            filename: file.name,
+          );
+        });
       }
-      await reload();
+      if (signedIn && !syncPaused) await reload();
     });
   }
 
   Future<void> _upload(MultipartFile file) async {
     if (!signedIn) throw const FormatException('请先登录');
+    if (syncPaused) throw const FormatException('同步已暂停，请先恢复');
+    final activeApi = api!, session = _sessionGeneration;
     cancelToken = CancelToken();
     progress = 0;
     update();
-    await api!.dio.post<dynamic>(
+    await activeApi.dio.post<dynamic>(
       '/files/upload',
       data: FormData.fromMap({
         'file': file,
@@ -964,73 +1002,82 @@ class CrossLinkController extends ChangeNotifier {
       }),
       cancelToken: cancelToken,
       onSendProgress: (sent, total) {
-        progress = total > 0 ? sent / total : 0;
-        update();
+        if (_isActive(activeApi, session)) {
+          progress = total > 0 ? sent / total : null;
+          update();
+        }
       },
     );
+    if (!_isActive(activeApi, session)) {
+      throw const FormatException('登录状态已变化，请重新发送');
+    }
   }
 
   Future<void> sendShared() async {
     await run(() async {
-      if (shared?['text'] != null) await sendMessage('text', shared!['text']);
-      for (final entry in (shared?['files'] as List? ?? [])) {
-        await _upload(
-          await MultipartFile.fromFile(entry['path'], filename: entry['name']),
+      final share = shared;
+      if (share == null) return;
+      fileResults.clear();
+      String? pendingText;
+      if (share['text'] is String) {
+        try {
+          await sendMessage('text', share['text']);
+        } catch (e) {
+          pendingText = share['text'];
+          error = userError(e);
+        }
+      }
+      final pending = <dynamic>[], completedPaths = <String>[];
+      for (final entry in (share['files'] as List? ?? const [])) {
+        final sent = await _tryUpload(
+          entry['name'],
+          () => MultipartFile.fromFile(entry['path'], filename: entry['name']),
         );
+        if (sent) {
+          completedPaths.add(entry['path']);
+        } else {
+          pending.add(entry);
+        }
       }
-      shared = null;
-      if (android) {
-        await PlatformBridge.channel.invokeMethod<void>('clearShares');
+      shared = pending.isEmpty && pendingText == null
+          ? null
+          : {'files': pending, 'text': ?pendingText};
+      if (android && completedPaths.isNotEmpty) {
+        await PlatformBridge.channel.invokeMethod<void>('clearShares', {
+          'paths': completedPaths,
+        });
       }
-      await reload();
+      if (signedIn && !syncPaused) await reload();
     });
   }
 
   Future<void> download(Map<String, dynamic> m) async {
     await run(() async {
+      if (!signedIn) throw const FormatException('请先登录');
+      if (syncPaused) throw const FormatException('同步已暂停，请先恢复');
+      final activeApi = api!, session = _sessionGeneration;
       final payload = Map<String, dynamic>.from(m['payload']);
       final fileId = payload['file_id'];
       cancelToken = CancelToken();
       progress = 0;
       update();
-      final response = await api!.dio.get<List<int>>(
+      final saved = await transfer.receiveFile(
+        activeApi.dio,
         '/files/$fileId/download',
-        options: Options(
-          responseType: ResponseType.bytes,
-          receiveTimeout: const Duration(minutes: 10),
-        ),
+        name: payload['name'] as String? ?? 'file',
+        mimeType: payload['mime_type'] as String? ?? 'application/octet-stream',
+        expectedHash: payload['sha256'] as String?,
+        expectedSize: (payload['size'] as num?)?.toInt(),
         cancelToken: cancelToken,
-        onReceiveProgress: (received, total) {
-          progress = total > 0 ? received / total : 0;
-          update();
+        onProgress: (received, total) {
+          if (_isActive(activeApi, session)) {
+            progress = total > 0 ? received / total : null;
+            update();
+          }
         },
       );
-      final bytes = Uint8List.fromList(response.data!);
-      final expectedHash =
-          payload['sha256'] ?? response.headers.value('x-file-sha256');
-      if (expectedHash == null ||
-          sha256.convert(bytes).toString() != expectedHash) {
-        throw const FormatException('文件校验失败，请重新下载');
-      }
-      final Uri? uri;
-      if (android) {
-        final saved = await PlatformBridge.channel.invokeMethod<String>(
-          'saveFile',
-          {
-            'name': payload['name'],
-            'mime_type': payload['mime_type'] ?? 'application/octet-stream',
-            'bytes': bytes,
-          },
-        );
-        uri = saved == null ? null : Uri.parse(saved);
-      } else {
-        uri = await FilePicker.saveFile(
-          dialogTitle: '保存收到的文件',
-          fileName: payload['name'],
-          bytes: bytes,
-        );
-      }
-      if (uri == null) return;
+      if (saved == null || !_isActive(activeApi, session)) return;
+      final uri = Uri.parse(saved);
       if (!kIsWeb) {
         downloadedPath = uri.scheme == 'file'
             ? uri.toFilePath()
@@ -1039,16 +1086,19 @@ class CrossLinkController extends ChangeNotifier {
       if (m['sender_device_id'] != deviceId &&
           m['id'] is String &&
           (m['id'] as String).isNotEmpty) {
-        await api!.dio.post<dynamic>('/messages/${m['id']}/read');
+        await activeApi.dio.post<dynamic>('/messages/${m['id']}/read');
+        if (!_isActive(activeApi, session)) return;
       }
-      final matching = (await api!.list('/transfers?file_id=$fileId')).where(
+      final rows = await activeApi.list('/transfers?file_id=$fileId');
+      if (!_isActive(activeApi, session)) return;
+      for (final t in rows.where(
         (t) => t['file_id'] == fileId && t['target_device_id'] == deviceId,
-      );
-      for (final t in matching) {
-        await api!.dio.patch<dynamic>(
+      )) {
+        await activeApi.dio.patch<dynamic>(
           '/transfers/${t['id']}',
           data: {'status': 'completed', 'progress': 100},
         );
+        if (!_isActive(activeApi, session)) return;
       }
       await reload();
     });

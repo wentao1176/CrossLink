@@ -45,3 +45,5 @@
 - Manual sends retain per-device operation IDs across retries, reject late session responses and preserve edited drafts. No-peer UI explains same-account login; Chinese statuses distinguish message delivery from file save completion.
 - Add pause/resume while retaining account credentials, Android durable pause guards and fresh native resume ownership. Add Windows current-user startup/tray options, single-instance activation, device/settings/pause tray actions and notification navigation.
 - Native test runner now fixes all Gradle/SDK paths inside /home/CrossLink regardless of the invoking shell environment.
+- Native downloads stream to private temporary files, verify size/SHA256 before save and pass only a path through platform channels. Windows uses a save dialog and staged replacement; Android copies to SAF in bounded chunks and preserves content URI grants. Cancel/hash/limit failures clean temporary data and do not fabricate completion receipts.
+- Sequential multi-file sends show individual outcomes, continue after one failure and retain failed Android shares for retry; only successful share cache files are removed.

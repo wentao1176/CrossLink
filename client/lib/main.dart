@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'controller.dart';
 import 'protocol.dart';
+import 'file_limits.dart';
 
 final controllerProvider = Provider<CrossLinkController>((ref) {
   final controller = CrossLinkController();
@@ -209,7 +210,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 18),
                 const Text(
-                  '在设置中启用复制粘贴同步。文件暂存 7 天，单文件最大 100 MB。',
+                  '在设置中启用复制粘贴同步。文件暂存 7 天，单文件最大 $maxFileSizeLabel。',
                   style: TextStyle(color: Colors.blueGrey, fontSize: 12),
                 ),
               ],
@@ -553,6 +554,31 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
+      if (c.fileResults.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        ...c.fileResults.map(
+          (result) => ListTile(
+            leading: Icon(
+              result['status'] == 'sent'
+                  ? Icons.check_circle_outline
+                  : result['status'] == 'failed'
+                  ? Icons.error_outline
+                  : Icons.upload_file,
+            ),
+            title: Text(result['name']),
+            subtitle: Text(
+              result['detail'] ??
+                  {
+                    'sent': '已上传，等待对方接收',
+                    'failed': '发送失败，可重试',
+                    'cancelled': '未发送或已取消',
+                    'uploading': '正在上传',
+                  }[result['status']] ??
+                  '等待发送',
+            ),
+          ),
+        ),
+      ],
       if (c.shared != null) ...[
         const SizedBox(height: 16),
         panel(
@@ -771,6 +797,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 '${size(t['file']['size'])} · ${transferStatusLabel(t['status'], incoming: t['target_device_id'] == c.deviceId)} · ${date(t['created_at'])}',
               ),
               const SizedBox(height: 10),
+              Text(
+                t['target_device_id'] == c.deviceId
+                    ? '接收自 ${deviceLabel(t['sender_device_id'])}'
+                    : '发送至 ${deviceLabel(t['target_device_id'])}',
+              ),
               LinearProgressIndicator(value: (t['progress'] as num) / 100),
               if (t['target_device_id'] == c.deviceId)
                 TextButton.icon(
@@ -849,7 +880,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
         if (c.android && !c.notificationsAllowed)
           const Text('通知权限未开启，前台仍可互传；可在系统设置中开启通知。'),
-        const Text('文件保留：7 天 · 最大 100 MB'),
+        const Text('文件保留：7 天 · 最大 $maxFileSizeLabel'),
         const SizedBox(height: 10),
         const Text('Android 关闭界面后继续接收消息，退出登录会停止同步。'),
         const SizedBox(height: 10),
@@ -863,6 +894,13 @@ class _HomeScreenState extends State<HomeScreen> {
       ],
     ),
   );
+  String deviceLabel(dynamic id) {
+    final matching = c.devices.where((d) => d['id'] == id);
+    return matching.isEmpty
+        ? '其他设备'
+        : matching.first['name'] as String? ?? '其他设备';
+  }
+
   String date(dynamic value) {
     if (value is! num) return '';
     final d = DateTime.fromMillisecondsSinceEpoch(value.toInt() * 1000)

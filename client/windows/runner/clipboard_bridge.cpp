@@ -1,6 +1,7 @@
 #include "clipboard_bridge.h"
 #include "clipboard_helpers.h"
 #include "startup_helpers.h"
+#include "file_helpers.h"
 #include <flutter/standard_method_codec.h>
 #include <cstdint>
 namespace {
@@ -15,6 +16,15 @@ ClipboardBridge::ClipboardBridge(flutter::BinaryMessenger* messenger,HWND window
  channel_=std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(messenger,"crosslink/native",&flutter::StandardMethodCodec::GetInstance());
  channel_->SetMethodCallHandler([this](const flutter::MethodCall<flutter::EncodableValue>& call,std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result){
   const auto* args=call.arguments();const std::string tag=StringArg(args,"owner");
+  if(call.method_name()=="transferDirectory"){
+   const auto directory=crosslink::TransferDirectory();if(!directory){result->Error("TEMP_DIRECTORY","Temporary directory unavailable");return;}
+   result->Success(flutter::EncodableValue(*directory));return;
+  }
+  if(call.method_name()=="saveFile"){
+   HRESULT error=S_OK;const auto path=crosslink::ChooseSavePath(window_,StringArg(args,"name"),error);
+   if(!path&&error!=HRESULT_FROM_WIN32(ERROR_CANCELLED)){result->Error("SAVE_FAILED","Unable to choose save location");return;}
+   result->Success(path?flutter::EncodableValue(*path):flutter::EncodableValue());return;
+  }
   if(call.method_name()=="startupRead"){
    const auto settings=crosslink::ReadStartup();
    result->Success(flutter::EncodableValue(flutter::EncodableMap{

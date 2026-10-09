@@ -67,7 +67,11 @@ class ControllerHarness {
       h.requests.add({
         'path': request.uri.path,
         'method': request.method,
-        'body': body.isEmpty ? null : jsonDecode(body),
+        'body': body.isEmpty
+            ? null
+            : request.headers.contentType?.mimeType == 'application/json'
+            ? jsonDecode(body)
+            : body,
       });
       request.response.headers.contentType = ContentType.json;
       await respond(request);
