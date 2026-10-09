@@ -71,6 +71,18 @@ try {
     if ($LASTEXITCODE) { throw 'Windows build failed.' }
     $releaseDir = Join-Path $projectRoot 'client\build\windows\x64\runner\Release'
     if (!(Test-Path -LiteralPath (Join-Path $releaseDir 'crosslink.exe'))) { throw 'Release executable is missing.' }
+    $visualStudioRoot = Join-Path $buildDirectory 'toolchain\BuildTools'
+    if (!(Test-Path -LiteralPath (Join-Path $visualStudioRoot 'VC\Redist\MSVC'))) {
+        $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+        $visualStudioRoot = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    }
+    $redistVersions = Get-ChildItem -LiteralPath (Join-Path $visualStudioRoot 'VC\Redist\MSVC') -Directory | Where-Object Name -match '^\d+\.\d+\.\d+$' | Sort-Object { [version]$_.Name } -Descending
+    if (!$redistVersions) { throw 'Official x64 CRT redistribution files are required.' }
+    $crt = Join-Path $redistVersions[0].FullName 'x64\Microsoft.VC143.CRT'
+    foreach ($required in @('msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll')) {
+        if (!(Test-Path -LiteralPath (Join-Path $crt $required))) { throw 'Required x64 C++ runtime is missing.' }
+    }
+    Get-ChildItem -LiteralPath $crt -Filter '*.dll' -File | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $releaseDir -Force }
     $suffix = if ($Channel -eq 'qa') { '-qa' } else { '' }
     $package = Join-Path $artifacts "CrossLink-$version-windows-x64$suffix.zip"
     Compress-Archive -Path (Join-Path $releaseDir '*') -DestinationPath $package -Force

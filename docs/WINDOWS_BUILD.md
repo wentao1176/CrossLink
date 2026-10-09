@@ -11,3 +11,5 @@ QA and production have separate installation names and resource product names. Q
 Native GUI/install/upgrade/uninstall acceptance remains separate from compilation and hashes. Private QA uses SSH forwarding; production public ports remain closed.
 
 Windows builds must use lib/main_windows.dart, selected by the helper. Desktop-only FFI is isolated from Android's AOT graph; SDK/dependency versions remain pinned. On Windows without symlink privilege, package restore finishes then the helper creates directory junctions under BuildRoot to caches under that same root. Existing links are verified and unlinked without recursion before restore. It does not turn on Developer Mode or elevate builds. C++ ATL is also required by the secure-storage plugin.
+
+Package official x64 CRT DLLs app-local from the installed MSVC redistribution directory before ZIP/setup. Required dependencies (MSVCP140/VCRUNTIME140/VCRUNTIME140_1) are verified from dumpbin; no global runtime installer or administrator prompt is needed by the CrossLink setup. Preserve redistribution notices and the full release directory.
