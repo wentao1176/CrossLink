@@ -31,3 +31,6 @@
 - Added a memory-constrained Android build helper for the 2 GB ECS and adjusted Gradle metaspace after D8 hit its previous cap.
 - Built and verified an ARM64-only split debug APK; final native-library filters match the included Flutter engine.
 - Final validation: 30 backend tests, 9 Dart tests, analyzer, Web release, real PostgreSQL/restart acceptance and APK integrity/signature.
+
+## Unreleased — 2026-10-09
+- Android UI reattach uses native connection snapshots and ordered state events; old owners and older state revisions are ignored.

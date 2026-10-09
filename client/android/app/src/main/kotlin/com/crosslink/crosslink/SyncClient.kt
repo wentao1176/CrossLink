@@ -17,6 +17,21 @@ class SyncClient(val endpoint: String, initial: JSONObject, val http: OkHttpClie
  private val saved: (JSONObject) -> Unit, private val message: (JSONObject) -> Unit,
  private val event: (JSONObject) -> Unit, private val revoked: () -> Unit,
  private val heartbeatIntervalMillis: Long = 30000) {
+ private val stateLock = Any()
+ private var connectionState = "stopped"
+ private var stateRevision = 0L
+ fun connectionSnapshot(): JSONObject = synchronized(stateLock) {
+  JSONObject().put("state", connectionState).put("revision", stateRevision)
+ }
+ private fun transition(next: String) {
+  val value = synchronized(stateLock) {
+   if ((stopped.get() && next != "stopped") || connectionState == next) return
+   connectionState = next
+   stateRevision += 1
+   JSONObject().put("type", "connection.state").put("state", next).put("revision", stateRevision)
+  }
+  event(value)
+ }
  private val tokenLock = Any()
  private var tokens = JSONObject(initial.toString())
  private val stopped = AtomicBoolean(false)
@@ -67,6 +82,7 @@ class SyncClient(val endpoint: String, initial: JSONObject, val http: OkHttpClie
  private fun connect(rotate: Boolean) {
   if (stopped.get()) return
   try {
+   transition(if (rotate) "reconnecting" else "connecting")
    if (rotate) refresh(snapshot().optString("access_token"))
    val epoch = ++generation
    val uri = endpoint.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") + "/ws"
@@ -82,6 +98,7 @@ class SyncClient(val endpoint: String, initial: JSONObject, val http: OkHttpClie
       when (data.optString("type")) {
        "pong" -> lastPong = System.currentTimeMillis()
        "auth_ok" -> {
+        transition("connected")
         attempts = 0
         lastPong = System.currentTimeMillis()
         heartbeat?.cancel(false)
@@ -168,6 +185,7 @@ class SyncClient(val endpoint: String, initial: JSONObject, val http: OkHttpClie
   if (stopped.get() || epoch != generation || retry?.isDone == false) return
   ++generation // Ignore callbacks from the closed socket.
   heartbeat?.cancel(false)
+  transition("reconnecting")
   event(JSONObject().put("type", "offline"))
   val delay = minOf(30L, 1L shl minOf(attempts++, 5))
   retry = executor.schedule({ retry = null; connect(true) }, delay, TimeUnit.SECONDS)
@@ -178,6 +196,7 @@ class SyncClient(val endpoint: String, initial: JSONObject, val http: OkHttpClie
 
  fun stop() {
   if (!stopped.compareAndSet(false, true)) return
+  transition("stopped")
   ++generation
   socket?.cancel()
   heartbeat?.cancel(false)

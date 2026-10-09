@@ -38,8 +38,8 @@ class MainActivity : FlutterActivity() {
                         try {
                             val snapshot = SyncService.client?.let { client ->
                                 val persisted = SessionStore.read(this)
-                                persisted?.put("tokens", client.snapshot())
-                            } ?: SessionStore.read(this)
+                                persisted?.put("tokens", client.snapshot())?.put("connection", client.connectionSnapshot())
+                            } ?: SessionStore.read(this)?.put("connection", JSONObject().put("state", "stopped").put("revision", 0))
                             runOnUiThread { result.success(snapshot?.toString()) }
                         } catch (_: Exception) { runOnUiThread { result.error("SESSION_STORAGE", "Session storage unavailable", null) } }
                     }
@@ -54,7 +54,7 @@ class MainActivity : FlutterActivity() {
                             val persisted = SessionStore.read(this)
                             if (existing != null && persisted?.optString("endpoint") == endpoint &&
                                 existing.snapshot().optString("device_id") == JSONObject(tokens).optString("device_id")) {
-                                val current = existing.snapshot().toString()
+                                val current = JSONObject(persisted!!.toString()).put("tokens", existing.snapshot()).put("connection", existing.connectionSnapshot()).toString()
                                 runOnUiThread { result.success(current) }
                                 return@execute
                             }
@@ -64,7 +64,7 @@ class MainActivity : FlutterActivity() {
                             runOnUiThread {
                                 try {
                                     ContextCompat.startForegroundService(this, Intent(this, SyncService::class.java).putExtra("replace", true))
-                                    result.success(owned.toString())
+                                    result.success(JSONObject().put("endpoint", endpoint).put("owner", owner).put("tokens", owned).put("connection", JSONObject().put("state", "connecting").put("revision", 0)).toString())
                                 } catch (_: Exception) { result.error("BACKGROUND_START", "Background messaging unavailable", null) }
                             }
                         } catch (_: Exception) { runOnUiThread { result.error("SESSION_STORAGE", "Session storage unavailable", null) } }

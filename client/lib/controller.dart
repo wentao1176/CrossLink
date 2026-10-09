@@ -44,6 +44,8 @@ class CrossLinkController extends ChangeNotifier {
       _connecting = false,
       _pulling = false;
   int attempts = 0, _generation = 0, _sessionGeneration = 0;
+  int _nativeRevision = -1;
+  String? _nativeStateOwner;
   double? progress;
   CancelToken? cancelToken;
   bool get signedIn => api?.tokens != null;
@@ -295,7 +297,17 @@ class CrossLinkController extends ChangeNotifier {
             api != activeApi) {
           return;
         }
-        await activeApi.accept(next);
+        await activeApi.accept(Map<String, dynamic>.from(next['tokens']));
+        _applyNativeConnection(next);
+        // Capture transitions that occurred before Flutter accepted the owner.
+        final current = await bridge.backgroundSnapshot();
+        if (disposed ||
+            sessionGeneration != _sessionGeneration ||
+            api != activeApi ||
+            !signedIn) {
+          return;
+        }
+        if (current != null) _applyNativeConnection(current);
         await pullPending();
       } catch (e) {
         error = userError(e);
@@ -380,6 +392,33 @@ class CrossLinkController extends ChangeNotifier {
     }
   }
 
+  void _applyNativeConnection(Map<String, dynamic> snapshot) {
+    final owner = snapshot['owner'];
+    if (!signedIn || owner != api!.tokens!['_native_owner']) return;
+    final raw = snapshot['connection'] ?? snapshot;
+    if (raw is! Map) return;
+    const labels = {
+      'connecting': '连接中',
+      'connected': '实时连接',
+      'reconnecting': '离线 · 自动重连',
+      'stopped': '未连接',
+    };
+    final label = labels[raw['state']];
+    final revision = raw['revision'];
+    if (label == null || revision is! num) return;
+    if (_nativeStateOwner != owner) {
+      _nativeStateOwner = owner as String?;
+      _nativeRevision = -1;
+    }
+    if (revision < _nativeRevision) return;
+    _nativeRevision = revision.toInt();
+    connection = label;
+    if (raw['state'] == 'connected') {
+      attempts = 0;
+      retry?.cancel();
+    }
+  }
+
   Future<void> _handleBackground(Map<String, dynamic> value) async {
     if (disposed ||
         !signedIn ||
@@ -392,13 +431,14 @@ class CrossLinkController extends ChangeNotifier {
       error = '登录已失效，请重新登录';
     } else if (kind == 'session.updated' && signedIn) {
       await api!.accept(Map<String, dynamic>.from(value['tokens']));
+    } else if (kind == 'connection.state') {
+      _applyNativeConnection(value);
     } else if (kind == 'auth_ok') {
       attempts = 0;
       retry?.cancel();
-      connection = '实时连接';
       await reload();
     } else if (kind == 'offline') {
-      connection = '离线 · 自动重连';
+      // The versioned native state event owns this label.
     } else if (signedIn) {
       final event = value['event']?.toString() ?? '';
       if ([
@@ -674,6 +714,8 @@ class CrossLinkController extends ChangeNotifier {
 
   Future<void> _clearSession() async {
     ++_sessionGeneration;
+    _nativeStateOwner = null;
+    _nativeRevision = -1;
     api?.tokens = null;
     await shutdown();
     if (android) await bridge.stopBackground();

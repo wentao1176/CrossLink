@@ -107,7 +107,7 @@ class SyncClientTest {
   val entered=CountDownLatch(1);val allow=CountDownLatch(1);val cleared=CountDownLatch(1)
   var persisted=false;var published=false
   val c=SyncClient(server.url("/").toString().trimEnd('/'),JSONObject("""{"access_token":"old","refresh_token":"refresh"}"""),OkHttpClient(),
-   {entered.countDown();allow.await(5,TimeUnit.SECONDS);persisted=true},{},{published=true},{})
+   {entered.countDown();allow.await(5,TimeUnit.SECONDS);persisted=true},{},{if(it.optString("type")=="session.updated")published=true},{})
   val refresh=Thread {try{c.refresh("old")}catch(_:java.io.IOException){}}
   try {
    refresh.start();assertTrue(entered.await(5,TimeUnit.SECONDS));c.stop()
@@ -143,6 +143,32 @@ class SyncClientTest {
   try{
    c.start();assertTrue(ackStarted.await(5,TimeUnit.SECONDS))
    assertTrue("ACK latency must not stall the socket heartbeat",ping.await(1,TimeUnit.SECONDS))
+  }finally{c.stop();server.shutdown()}
+ }
+
+ @Test fun connectionStateTracksAuthenticationReconnectAndStop() {
+  val server=MockWebServer();val auth=CountDownLatch(1);val online=CountDownLatch(1);val offline=CountDownLatch(1)
+  var remote:WebSocket?=null
+  server.dispatcher=object:okhttp3.mockwebserver.Dispatcher(){
+   override fun dispatch(req:RecordedRequest):MockResponse {
+    if(req.path=="/ws")return MockResponse().withWebSocketUpgrade(object:WebSocketListener(){
+     override fun onMessage(ws:WebSocket,text:String){remote=ws;auth.countDown()}
+     override fun onClosing(ws:WebSocket,code:Int,reason:String){ws.close(code,null)}
+    })
+    if(req.path?.startsWith("/api/v1/messages/pending")==true)return MockResponse().setBody("[]")
+    return MockResponse().setResponseCode(503)
+   }
+  };server.start()
+  val c=SyncClient(server.url("/").toString().trimEnd('/'),JSONObject("""{"access_token":"a","refresh_token":"r","device_id":"phone"}"""),OkHttpClient(),{},{},
+   {if(it.optString("type")=="connection.state"){if(it.optString("state")=="connected")online.countDown();if(it.optString("state")=="reconnecting")offline.countDown()}},{fail("Unexpected revocation")})
+  try {
+   assertEquals("stopped",c.connectionSnapshot().getString("state"))
+   c.start();assertTrue(auth.await(8,TimeUnit.SECONDS));assertEquals("connecting",c.connectionSnapshot().getString("state"))
+   val starting=c.connectionSnapshot().getLong("revision")
+   remote!!.send("""{"type":"auth_ok"}""");assertTrue(online.await(8,TimeUnit.SECONDS))
+   assertEquals("connected",c.connectionSnapshot().getString("state"));assertTrue(c.connectionSnapshot().getLong("revision")>starting)
+   remote!!.close(1000,"test reconnect");assertTrue(offline.await(8,TimeUnit.SECONDS));assertEquals("reconnecting",c.connectionSnapshot().getString("state"))
+   c.stop();assertEquals("stopped",c.connectionSnapshot().getString("state"))
   }finally{c.stop();server.shutdown()}
  }
 }
