@@ -44,6 +44,8 @@ class CrossLinkController extends ChangeNotifier {
       _connecting = false,
       _pulling = false;
   int attempts = 0, _generation = 0, _sessionGeneration = 0;
+  int _deviceFetchRevision = 0;
+  final Map<String, String> _earlyReceipts = {};
   int _nativeRevision = -1;
   String? _nativeStateOwner;
   double? progress;
@@ -129,6 +131,7 @@ class CrossLinkController extends ChangeNotifier {
   void _setupApi() {
     api?.close();
     final sessionGeneration = ++_sessionGeneration;
+    _earlyReceipts.clear();
     api = Api(
       endpoint,
       refreshProvider: android
@@ -239,14 +242,22 @@ class CrossLinkController extends ChangeNotifier {
     if (saved != null) {
       try {
         for (final item in (jsonDecode(saved) as List).reversed) {
-          cache.put(Map<String, dynamic>.from(item));
+          final message = Map<String, dynamic>.from(item);
+          if (prefs.getInt('history_format_$deviceId') != 2 &&
+              message['sender_device_id'] == deviceId &&
+              message['status'] == 'read') {
+            message['status'] = 'unknown';
+          }
+          _putMessage(message);
         }
       } catch (_) {}
     }
   }
 
   Future<void> _saveCache() async {
-    await prefs.setString('history_$deviceId', jsonEncode(cache.items));
+    final id = deviceId;
+    await prefs.setString('history_$id', jsonEncode(cache.items));
+    await prefs.setInt('history_format_$id', 2);
   }
 
   void _applyDeviceList(List<Map<String, dynamic>> list) {
@@ -264,6 +275,7 @@ class CrossLinkController extends ChangeNotifier {
     if (!signedIn) return;
     final activeApi = api!;
     final session = _sessionGeneration;
+    final revision = ++_deviceFetchRevision;
     final list = await activeApi.list('/devices');
     if (disposed ||
         !signedIn ||
@@ -271,7 +283,7 @@ class CrossLinkController extends ChangeNotifier {
         session != _sessionGeneration) {
       return;
     }
-    _applyDeviceList(list);
+    if (revision == _deviceFetchRevision) _applyDeviceList(list);
     update();
   }
 
@@ -279,6 +291,7 @@ class CrossLinkController extends ChangeNotifier {
     if (!signedIn) return;
     final activeApi = api!;
     final session = _sessionGeneration;
+    final revision = ++_deviceFetchRevision;
     final data = await Future.wait([
       activeApi.list('/devices'),
       activeApi.list('/messages'),
@@ -291,11 +304,11 @@ class CrossLinkController extends ChangeNotifier {
         session != _sessionGeneration) {
       return;
     }
-    _applyDeviceList(data[0]);
+    if (revision == _deviceFetchRevision) _applyDeviceList(data[0]);
     transfers = data[2];
     clips = data[3];
     for (final m in data[1].reversed) {
-      cache.put(m);
+      _putMessage(m);
     }
     if (target != null && !devices.any((d) => d['id'] == target)) target = null;
     await _saveCache();
@@ -530,15 +543,30 @@ class CrossLinkController extends ChangeNotifier {
       api == activeApi &&
       session == _sessionGeneration;
 
+  bool _putMessage(Map<String, dynamic> message) {
+    final fresh = cache.put(message);
+    if (message['sender_device_id'] == deviceId) {
+      final status = _earlyReceipts.remove(message['id']);
+      if (status != null) cache.updateReceipt(message['id'], status);
+    }
+    return fresh;
+  }
+
   Future<void> _receiveReceipt(Map<String, dynamic> receipt) async {
     if (!signedIn) return;
     final id = receipt['message_id'];
     final status = receipt['status'];
-    if (id is! String || status is! String) return;
-    final sent = cache.items.any(
-      (m) => m['id'] == id && m['sender_device_id'] == deviceId,
-    );
-    if (sent && cache.updateReceipt(id, status)) {
+    const rank = {'pending': 0, 'delivered': 1, 'read': 2};
+    if (id is! String || status is! String || !rank.containsKey(status)) return;
+    final matches = cache.items.where((m) => m['id'] == id);
+    if (matches.isEmpty) {
+      final previous = _earlyReceipts[id];
+      if ((rank[previous] ?? -1) <= rank[status]!) _earlyReceipts[id] = status;
+      while (_earlyReceipts.length > 200) {
+        _earlyReceipts.remove(_earlyReceipts.keys.first);
+      }
+    } else if (matches.first['sender_device_id'] == deviceId &&
+        cache.updateReceipt(id, status)) {
       await _saveCache();
       update();
     }
@@ -548,7 +576,7 @@ class CrossLinkController extends ChangeNotifier {
     if (!signedIn) return;
     final activeApi = api!;
     final session = _sessionGeneration;
-    final fresh = cache.put(m);
+    final fresh = _putMessage(m);
     await _saveCache();
     if (!_isActive(activeApi, session)) return;
     final receipt = await activeApi.dio.post<dynamic>(
@@ -602,7 +630,7 @@ class CrossLinkController extends ChangeNotifier {
         'payload': {'content': content, 'title': ?title},
       },
     );
-    cache.put(Map<String, dynamic>.from(response.data));
+    _putMessage(Map<String, dynamic>.from(response.data));
     await _saveCache();
     text.clear();
     update();
@@ -623,14 +651,21 @@ class CrossLinkController extends ChangeNotifier {
 
   Future<void> copyMessage(Map<String, dynamic> m) async {
     await run(() async {
+      final activeApi = api;
+      final session = _sessionGeneration;
       await Clipboard.setData(
         ClipboardData(text: m['payload']['content'] ?? ''),
       );
-      if (m['sender_device_id'] != deviceId) {
-        await api!.dio.post<dynamic>('/messages/${m['id']}/read');
+      if (m['sender_device_id'] != deviceId &&
+          activeApi != null &&
+          _isActive(activeApi, session)) {
+        final response = await activeApi.dio.post<dynamic>(
+          '/messages/${m['id']}/read',
+        );
+        if (!_isActive(activeApi, session)) return;
+        _putMessage({...m, 'status': response.data['status']});
+        await _saveCache();
       }
-      cache.put({...m, 'status': 'read'});
-      await _saveCache();
     });
   }
 
@@ -789,6 +824,7 @@ class CrossLinkController extends ChangeNotifier {
 
   Future<void> _clearSession() async {
     ++_sessionGeneration;
+    _earlyReceipts.clear();
     _nativeStateOwner = null;
     _nativeRevision = -1;
     api?.tokens = null;
