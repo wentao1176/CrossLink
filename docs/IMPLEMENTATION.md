@@ -31,3 +31,9 @@ Android build diagnosis: kernel OOM in uncapped builds; isolated cgroup v1 resid
 Final closure: analyzer clean; latest Web release built; 30 backend tests and 9 Dart tests passed; live PostgreSQL/restart acceptance passed. ARM64 split debug APK successfully built with saved low-memory helper and validated signature, ZIP and ABI. API/database active and enabled, loopback only. Native Windows build and physical-device acceptance remain pending as stated in scope.
 
 2026-10-04 platform follow-up: user authorized automatic implementation and clarified that native login must only show account/password. Added build-time endpoint injection, auto device names, native TLS root, loopback HTTPS gateway/renewal, Android foreground service with native refresh ownership, replay pagination and logout/late-result guards. Windows build kit is prepared for an existing Windows/C++ environment; Linux cannot produce the Windows executable. 30 backend, 13 Dart, 7 native JVM tests, clean analyzer, verified HTTPS/WSS restart acceptance and browser login/peer/message checks have passed. Final 0.2.0 ARM64 APK rebuild, signature, ZIP, engine ABI, public-CA and native service packaging verification passed. Windows build kit is packaged from committed source.
+
+## Follow-up delivery roadmap — 2026-10-09
+
+用户要求先根据当前进度制定详细后续路线。总路线见 [CrossLink 后续交付路线](superpowers/plans/2026-10-09-crosslink-delivery-roadmap.md)，第一阶段的五项具体修复见 [稳定性修复计划](superpowers/plans/2026-10-09-crosslink-stabilization.md)。规划按安装、同账号登录、自动发现、隐式平台中转和两端实机验收推进；Windows 构建节点、实机验证、公网授权分别作为显式依赖。当前为计划文档，尚未执行其中修复或开放步骤。
+
+2026-10-09 需求补充：用户强调“不要忘记复制粘贴同步”。总路线已将文字/链接自动剪贴板能力前移到首版 C4，验收要求为跨设备系统剪贴板更新后实际粘贴成功；手动按钮保留为补充。Android 后台读取限制需单独说明与实机验证，不以消息列表收到了文本代替同步完成。此项为路线修订，尚未实现。
