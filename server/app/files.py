@@ -1,3 +1,4 @@
+import errno
 import hashlib
 import re
 import stat
@@ -12,6 +13,7 @@ from .schemas import SendMessage,TransferUpdate
 from .messages import create_message,push_message
 from .dependencies import get_db,principal
 from .security import fail
+from .storage_budget import StorageLow
 router=APIRouter(prefix="/api/v1")
 _storage_lock=threading.RLock()
 _active_uploads:set[str]=set()
@@ -25,13 +27,17 @@ async def upload(request:Request,file:UploadFile=Upload(...),target_device_id:st
     settings=request.app.state.settings
     file_id=uid();path=settings.file_storage_path/file_id;part=settings.file_storage_path/(file_id+".part")
     size=0;hasher=hashlib.sha256();committed=False
+    reservation=request.scope.get('crosslink.storage_reservation')
+    if reservation is not None:reservation.remaining(file.size if file.size is not None else settings.max_file_size)
     with _storage_lock:_active_uploads.add(file_id)
     try:
         with part.open("xb") as out:
             while chunk:=await file.read(1024*1024):
                 size+=len(chunk)
                 if size>settings.max_file_size:fail(413,"FILE_TOO_LARGE","File exceeds configured maximum size")
+                if reservation is not None:reservation.ensure_space()
                 hasher.update(chunk);out.write(chunk)
+                if reservation is not None:reservation.consumed(len(chunk))
         part.replace(path)
         f=File(id=file_id,user_id=p.user.id,sender_device_id=p.device.id,original_name=safe_name(file.filename),storage_name=file_id,mime_type=(file.content_type or "application/octet-stream")[:255],size=size,sha256=hasher.hexdigest(),expires_at=now()+settings.file_retention_seconds)
         db.add(f);db.flush()
@@ -40,6 +46,11 @@ async def upload(request:Request,file:UploadFile=Upload(...),target_device_id:st
         committed=True
         await push_message(request.app,db,m,recipients)
         return {**file_view(f),"message_id":m.id}
+    except StorageLow:
+        fail(507,"STORAGE_LOW","平台空间暂时不足，请稍后重试")
+    except OSError as exc:
+        if exc.errno in (errno.ENOSPC,errno.EDQUOT):fail(507,"STORAGE_LOW","平台空间暂时不足，请稍后重试")
+        raise
     finally:
         try:
             await file.close();part.unlink(missing_ok=True)

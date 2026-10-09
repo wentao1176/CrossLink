@@ -12,6 +12,7 @@ from sqlalchemy import create_engine,text
 from sqlalchemy.orm import sessionmaker
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from .config import Settings
+from .storage_budget import StorageBudget,StorageSpace
 from .models import Base
 from .realtime import Hub,websocket_handler
 from . import accounts,messages,files
@@ -56,9 +57,11 @@ def create_app(**overrides):
         task.cancel()
         with suppress(asyncio.CancelledError):await task
         await hub.shutdown();engine.dispose()
-    app=FastAPI(title="CrossLink",version="0.1.0",lifespan=lifespan)
+    app=FastAPI(title="CrossLink",version="0.3.0",lifespan=lifespan)
     app.state.settings=settings;app.state.factory=factory;app.state.hub=hub
     app.add_middleware(BodyLimit,limit=settings.max_file_size)
+    app.state.storage_budget=StorageBudget(settings.file_storage_path,settings.storage_min_free_bytes)
+    app.add_middleware(StorageSpace,budget=app.state.storage_budget,maximum=settings.max_file_size+1024*1024)
     attempts=defaultdict(deque)
     @app.middleware("http")
     async def request_log(request:Request,call_next):

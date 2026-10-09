@@ -12,3 +12,7 @@ client/.idea
 **/.pytest_cache
 
 deploy/platform_tls/
+
+backups/
+releases/
+.build/

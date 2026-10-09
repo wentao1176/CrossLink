@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     refresh_token_expire: int = 2592000
     file_storage_path: Path = Path("/home/CrossLink/data/files")
     max_file_size: int = 100 * 1024 * 1024
+    storage_min_free_bytes: int = Field(default=2 * 1024**3, ge=0)
     file_retention_seconds: int = 7 * 86400
     heartbeat_timeout: int = 90
     web_dist_path: Path = Path("/home/CrossLink/client/build/web")

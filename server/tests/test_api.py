@@ -374,6 +374,7 @@ def test_cleanup_does_not_follow_symlinks(client, tmp_path):
 
 def test_process_exit_before_commit_is_recovered_as_orphan(tmp_path):
     import os, sys, subprocess
+    from pathlib import Path
     from sqlalchemy import select
     from app.files import cleanup
     from app.models import File, now
@@ -392,7 +393,7 @@ with TestClient(app) as client:
  client.post('/api/v1/files/upload',headers={'Authorization':'Bearer '+tokens['access_token']},files={'file':('orphan.txt',b'crash','text/plain')})
 """
     result = subprocess.run([sys.executable, "-c", program, str(database), str(directory)],
-                            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, capture_output=True, text=True)
+                            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(Path(__file__).resolve().parents[1])}, capture_output=True, text=True)
     assert result.returncode == 77, result.stderr
     orphan = list(directory.iterdir())
     assert len(orphan) == 1 and orphan[0].suffix != ".part"

@@ -52,19 +52,17 @@ try {
     $dependencyOutput = & $flutter --no-version-check pub get --enforce-lockfile 2>&1
     $dependencyCode = $LASTEXITCODE
     $dependencyOutput | Write-Output
-    if ($dependencyCode) {
-        if (($dependencyOutput -join "`n") -notmatch 'Building with plugins requires symlink support') { throw 'Locked dependencies failed.' }
-        $plugins = (Get-Content -Raw -LiteralPath '.flutter-plugins-dependencies' | ConvertFrom-Json).plugins.windows
-        New-Item -ItemType Directory -Force -Path $links | Out-Null
-        foreach ($plugin in $plugins) {
-            if ($plugin.name -notmatch '^[a-z][a-z0-9_]*$') { throw 'Invalid plugin directory name.' }
-            $target = [IO.Path]::GetFullPath($plugin.path)
-            if (!$target.StartsWith($scope,[StringComparison]::OrdinalIgnoreCase)) { throw 'Plugin cache must stay within BuildRoot.' }
-            $link = Join-Path $links $plugin.name
-            if (!(Test-Path -LiteralPath $link)) { New-Item -ItemType Junction -Path $link -Target $target | Out-Null }
-        }
-        Write-Output 'Locked packages restored; using project-local Windows junctions without Developer Mode.'
+    if ($dependencyCode -and ($dependencyOutput -join "`n") -notmatch 'Building with plugins requires symlink support') { throw 'Locked dependencies failed.' }
+    $plugins = (Get-Content -Raw -LiteralPath '.flutter-plugins-dependencies' | ConvertFrom-Json).plugins.windows
+    New-Item -ItemType Directory -Force -Path $links | Out-Null
+    foreach ($plugin in $plugins) {
+        if ($plugin.name -notmatch '^[a-z][a-z0-9_]*$') { throw 'Invalid plugin directory name.' }
+        $target = [IO.Path]::GetFullPath($plugin.path)
+        if (!$target.StartsWith($scope,[StringComparison]::OrdinalIgnoreCase)) { throw 'Plugin cache must stay within BuildRoot.' }
+        $link = Join-Path $links $plugin.name
+        if (!(Test-Path -LiteralPath $link)) { New-Item -ItemType Junction -Path $link -Target $target | Out-Null }
     }
+    Write-Output 'Locked packages restored; project-local plugin links ready without Developer Mode.'
     & $flutter --no-version-check analyze --no-pub
     if ($LASTEXITCODE) { throw 'Analysis failed.' }
     & $flutter --no-version-check test --no-pub
