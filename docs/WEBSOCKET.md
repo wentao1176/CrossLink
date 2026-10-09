@@ -10,3 +10,5 @@ ACK: `{type:"ack",message_id:"..."}`; read: `{type:"read",message_id:"..."}`. Re
 One worker only: the in-memory Hub handles the current MVP, while PostgreSQL stores durable receipts. Redis Compose profile is reserved; do not increase worker count until pub/sub fanout is implemented.
 
 Sender receipt event `message.receipt.updated`: data includes message_id, recipient_device_id, recipient_status and aggregate status. It follows durable ACK/read commit and is sent only to the original sender device. Clients merge monotonically and reconcile history after reconnect, without ACKing or notifying about receipt updates.
+
+Versioned clipboard.updated payload includes content, content_hash, origin_device_id, clipboard_revision and expires_at. Automatic clients ignore stale/expired/invalid-hash data and must reconcile latest snapshot before applying reconnect replay.

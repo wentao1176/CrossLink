@@ -88,6 +88,21 @@ try:
     second=check(client.get("/api/v1/messages",headers=headers(a),params={"limit":2,"before":first[-1]["created_at"],"before_id":first[-1]["id"]}))
     assert [m["id"] for m in first+second]==sorted(ids,reverse=True)
     print("PASS: custom device name survives sign-in; real PostgreSQL same-second history cursor")
+    # Atomic clipboard revisions and idempotent operations across real concurrent HTTP calls.
+    from concurrent.futures import ThreadPoolExecutor
+    key=str(uuid.uuid4());body={"target_device_id":b["device_id"],"type":"clipboard","client_message_id":key,"payload":{"content":" \t\r\n"}}
+    clip=check(client.post("/api/v1/messages",headers=headers(a),json=body),201)
+    duplicate=check(client.post("/api/v1/messages",headers=headers(a),json=body),201)
+    assert clip["id"]==duplicate["id"] and clip["payload"]["clipboard_revision"]==2
+    def concurrent_clip(index):
+        return check(client.post("/api/v1/messages",headers=headers(a),json={"target_device_id":b["device_id"],"type":"clipboard","client_message_id":str(uuid.uuid4()),"payload":{"content":"concurrent clipboard "+str(index)}}),201)
+    with ThreadPoolExecutor(max_workers=6) as pool:messages=list(pool.map(concurrent_clip,range(6)))
+    assert sorted(m["payload"]["clipboard_revision"] for m in messages)==list(range(3,9))
+    assert check(client.get("/api/v1/clipboard/latest",headers=headers(b)))["payload"]["clipboard_revision"]==8
+    shared={"target_device_id":b["device_id"],"type":"clipboard","client_message_id":str(uuid.uuid4()),"payload":{"content":"same concurrent operation"}}
+    with ThreadPoolExecutor(max_workers=2) as pool:duplicates=list(pool.map(lambda _:check(client.post("/api/v1/messages",headers=headers(a),json=shared),201),range(2)))
+    assert duplicates[0]["id"]==duplicates[1]["id"] and all(m["payload"]["clipboard_revision"]==9 for m in duplicates)
+    print("PASS: clipboard latest snapshot, whitespace, atomic concurrent revisions and retry idempotence")
     check(client.delete("/api/v1/devices/"+b["device_id"],headers=headers(a)),204)
     check(client.get("/api/v1/devices",headers=headers(b)),401)
     check(client.post("/api/v1/auth/refresh",json={"refresh_token":b["refresh_token"]}),401)

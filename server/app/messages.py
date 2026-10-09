@@ -2,9 +2,9 @@ import hashlib
 from uuid import UUID
 from urllib.parse import urlparse
 from fastapi import APIRouter,Depends,Request,Query
-from sqlalchemy import select,or_,and_
+from sqlalchemy import select,or_,and_,update
 from sqlalchemy.exc import IntegrityError
-from .models import Message,Receipt,Device,Clipboard,File,Transfer,now
+from .models import Message,Receipt,Device,Clipboard,File,Transfer,User,now
 from .schemas import SendMessage
 from .security import fail
 from .dependencies import get_db,principal
@@ -28,7 +28,7 @@ def validate_payload(db,p,body):
         if f.expires_at<=now():fail(410,"FILE_EXPIRED","File expired")
         return {"file_id":f.id,"name":f.original_name,"size":f.size,"mime_type":f.mime_type,"sha256":f.sha256,"expires_at":f.expires_at}
     content=payload.get("content")
-    if not isinstance(content,str) or not content.strip() or len(content.encode())>102400:fail(422,"INVALID_PAYLOAD","Content must contain 1–102400 UTF-8 bytes")
+    if not isinstance(content,str) or (not content if body.type=="clipboard" else not content.strip()) or len(content.encode())>102400:fail(422,"INVALID_PAYLOAD","Content must contain 1–102400 UTF-8 bytes")
     result={"content":content}
     if body.type=="url":
         url=urlparse(content)
@@ -53,9 +53,17 @@ def create_message(db,p,body,settings):
     if body.client_message_id:
         existing=db.scalar(select(Message).where(Message.sender_device_id==p.device.id,Message.client_message_id==body.client_message_id))
         if existing:
-            if existing.target_device_id!=body.target_device_id or existing.message_type!=body.type or existing.payload!=payload:fail(409,"IDEMPOTENCY_CONFLICT","Message key already used for a different payload")
+            expected=dict(existing.payload)
+            if existing.message_type=="clipboard":
+                expected.pop("clipboard_revision",None);expected.pop("expires_at",None)
+            if existing.target_device_id!=body.target_device_id or existing.message_type!=body.type or expected!=payload:fail(409,"IDEMPOTENCY_CONFLICT","Message key already used for a different payload")
             return existing,[],False
-    m=Message(user_id=p.user.id,sender_device_id=p.device.id,target_device_id=body.target_device_id,message_type=body.type,payload=payload,client_message_id=body.client_message_id)
+    revision=None;expires=None
+    if body.type=="clipboard":
+        revision=db.scalar(update(User).where(User.id==p.user.id).values(clipboard_revision=User.clipboard_revision+1).returning(User.clipboard_revision))
+        expires=now()+settings.file_retention_seconds
+        payload={**payload,"clipboard_revision":revision,"expires_at":expires}
+    m=Message(user_id=p.user.id,sender_device_id=p.device.id,target_device_id=body.target_device_id,message_type=body.type,payload=payload,client_message_id=body.client_message_id,clipboard_revision=revision,clipboard_expires_at=expires)
     db.add(m);db.flush()
     for device_id in recipients:
         db.add(Receipt(message_id=m.id,device_id=device_id))
@@ -113,3 +121,9 @@ async def read(message_id:str,request:Request,p=Depends(principal),db=Depends(ge
 @router.get("/clipboard")
 def clipboard(p=Depends(principal),db=Depends(get_db),limit:int=Query(50,ge=1,le=100)):
     return [{"id":c.id,"device_id":c.device_id,"content":c.content,"content_hash":c.content_hash,"created_at":c.created_at,"expires_at":c.expires_at} for c in db.scalars(select(Clipboard).where(Clipboard.user_id==p.user.id,Clipboard.expires_at>now()).order_by(Clipboard.created_at.desc()).limit(limit))]
+
+@router.get("/clipboard/latest")
+def latest_clipboard(p=Depends(principal),db=Depends(get_db)):
+    ids=select(Receipt.message_id).where(Receipt.device_id==p.device.id)
+    message=db.scalar(select(Message).where(Message.user_id==p.user.id,Message.message_type=="clipboard",Message.clipboard_revision.is_not(None),Message.clipboard_expires_at>now(),or_(Message.sender_device_id==p.device.id,Message.id.in_(ids))).order_by(Message.clipboard_revision.desc()).limit(1))
+    return view(db,message,p.device.id) if message is not None else None

@@ -15,6 +15,7 @@ class User(Identity, Base):
     email: Mapped[str] = mapped_column(String(254), unique=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     status: Mapped[bool] = mapped_column(Boolean, default=True)
+    clipboard_revision: Mapped[int] = mapped_column(BigInteger,default=0,server_default="0")
 class Device(Identity, Base):
     __tablename__="devices"
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
@@ -35,13 +36,15 @@ class Session(Identity, Base):
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
 class Message(Identity, Base):
     __tablename__="messages"
-    __table_args__=(UniqueConstraint("sender_device_id","client_message_id"),)
+    __table_args__=(UniqueConstraint("sender_device_id","client_message_id"),Index("ix_clipboard_latest","user_id","clipboard_revision",unique=True))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     sender_device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"))
     target_device_id: Mapped[str|None] = mapped_column(ForeignKey("devices.id"), nullable=True)
     client_message_id: Mapped[str|None] = mapped_column(String(128), nullable=True)
     message_type: Mapped[str] = mapped_column(String(20))
     payload: Mapped[dict] = mapped_column(JSON)
+    clipboard_revision: Mapped[int|None] = mapped_column(BigInteger,nullable=True)
+    clipboard_expires_at: Mapped[int|None] = mapped_column(BigInteger,nullable=True)
 class Receipt(Identity, Base):
     __tablename__="message_receipts"
     __table_args__=(UniqueConstraint("message_id","device_id"),Index("ix_pending","device_id","status"))

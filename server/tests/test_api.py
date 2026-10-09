@@ -451,3 +451,56 @@ def test_history_pages_do_not_include_foreign_accounts(client):
     assert seen == sorted(owned, reverse=True)
     assert not set(foreign).intersection(seen)
     assert len(seen) == len(set(seen))
+
+
+def test_clipboard_revision_latest_and_client_fields_are_authoritative(client):
+    a=login(client);b=login(client,device="Phone",register=False)
+    first=send(client,a,b["device_id"],"clipboard",{"content":"你好\nhttps://example.com", "clipboard_revision":999, "origin_device_id":"forged"}).json()
+    assert first["payload"].get("clipboard_revision")==1
+    assert first["payload"]["origin_device_id"]==a["device_id"]
+    second=send(client,a,b["device_id"],"clipboard",{"content":"next"}).json()
+    assert second["payload"]["clipboard_revision"]==2
+    latest=client.get("/api/v1/clipboard/latest",headers=auth(b))
+    assert latest.status_code==200
+    assert latest.json()["id"]==second["id"]
+
+
+def test_clipboard_retry_reuses_revision_and_new_operation_advances(client):
+    a=login(client);b=login(client,device="Phone",register=False);key=str(uuid.uuid4())
+    first=send(client,a,b["device_id"],"clipboard",{"content":"same"},key=key).json()
+    retry=send(client,a,b["device_id"],"clipboard",{"content":"same"},key=key).json()
+    assert retry["id"]==first["id"]
+    assert retry["payload"].get("clipboard_revision")==1
+    next_message=send(client,a,b["device_id"],"clipboard",{"content":"same"},key=str(uuid.uuid4())).json()
+    assert next_message["payload"]["clipboard_revision"]==2
+
+
+def test_latest_clipboard_is_visible_only_to_snapshot_recipients(client):
+    a=login(client);b=login(client,device="Phone",register=False);c=login(client,device="Tablet",register=False);foreign=login(client,username="bob")
+    for who in (a,b,c,foreign):
+        result=client.get("/api/v1/clipboard/latest",headers=auth(who))
+        assert result.status_code==200 and result.json() is None
+    first=send(client,a,b["device_id"],"clipboard",{"content":"for phone"}).json()
+    second=send(client,a,c["device_id"],"clipboard",{"content":"for tablet"}).json()
+    assert client.get("/api/v1/clipboard/latest",headers=auth(b)).json()["id"]==first["id"]
+    assert client.get("/api/v1/clipboard/latest",headers=auth(c)).json()["id"]==second["id"]
+    assert client.get("/api/v1/clipboard/latest",headers=auth(a)).json()["id"]==second["id"]
+    assert client.get("/api/v1/clipboard/latest",headers=auth(foreign)).json() is None
+
+
+def test_expired_clipboard_snapshot_is_not_applied(client):
+    from sqlalchemy import update
+    from app.models import Message,now
+    a=login(client);b=login(client,device="Phone",register=False)
+    message=send(client,a,b["device_id"],"clipboard",{"content":"expired"}).json()
+    with client.app.state.factory() as db:
+        db.execute(update(Message).where(Message.id==message["id"]).values(clipboard_expires_at=now()-1));db.commit()
+    assert client.get("/api/v1/clipboard/latest",headers=auth(b)).json() is None
+
+
+@pytest.mark.parametrize("content", [" \t ", "\r\n", "　"])
+def test_clipboard_preserves_whitespace_content(client, content):
+    a=login(client);b=login(client,device="Phone",register=False)
+    response=send(client,a,b["device_id"],"clipboard",{"content":content})
+    assert response.status_code==201
+    assert response.json()["payload"]["content"]==content
