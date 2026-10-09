@@ -41,3 +41,9 @@ CrossLink-0.2.0-arm64-debug.apk: 121719745 bytes; version 0.2.0, split version c
 SHA256: 17a6c943f37411b827fcf399e4ac78d4c95a9bcfbc43bb815c0c00beaa600718.
 
 Windows source build kit is packaged from the recorded Git revision, contains public CA and internal HTTPS configuration, and is checked for ZIP integrity and absence of private keys. Checksums for both packages are in artifacts/SHA256SUMS. No Windows executable or physical-device acceptance is claimed.
+
+## 2026-10-09 stabilization follow-up
+
+Five audited source defects were fixed with observed regression failures and passing results. Backend full suite: 42 passed (one existing third-party deprecation); shared client: 26 passed, analyzer clean; native transport: 8 passed with fresh JVM result. Real PostgreSQL candidate uses an isolated temporary schema and loopback HTTPS/WSS with the bundled CA; sender delivery/read, persisted renamed device, same-second cursor, file/hash/ownership and revocation checks passed. Production source has not yet been reloaded at this stage.
+
+One independent source review identified early receipt-before-HTTP ordering, outgoing-copy false read, and old device reload overwrite. Four controlled regressions (including legacy cached false read) were seen failing, then fixed; the entire Dart suite passed. Receipts are buffered within the current session until their message appears, copying a sent record does not alter server status, device results are ordered, and legacy unverified outgoing read is revalidated from server history. Automatic copy/paste C4 and native package/device acceptance remain the next stage.
