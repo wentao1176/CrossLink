@@ -43,7 +43,7 @@
 - Keep one API worker until a Redis message bus is implemented.
 - No public listeners or firewall/security-group changes without the user's later request.
 
-Windows 特殊依赖：当前阿里云主机是 Linux，现有 Flutter Windows 构建需要 Windows 与 Visual Studio C++ 工具链。工程、调度、归档中心仍在 `/home/CrossLink`；真正生成 Windows 二进制需使用获准的远端 Windows 构建节点，经 SSH 调度，将产物回传服务器。当前没有已确认可用的节点，也不假设可用账号、CI 仓库或付费资源。本机不安装开发环境；没有构建节点时该项如实标记“环境待具备”，不能以 Web 或源码包替代。依据：[Flutter Windows 环境文档](https://docs.flutter.dev/platform-integration/windows/setup)。
+Windows 特殊依赖：当前阿里云主机是 Linux，现有 Flutter Windows 构建需要 Windows 与 Visual Studio C++ 工具链。工程、调度、归档中心仍在 `/home/CrossLink`；真正生成 Windows 二进制需使用获准的远端 Windows 构建节点，经 SSH 调度，将产物回传服务器。当前没有已确认可用的节点，也不假设可用账号、CI 仓库或付费资源。用户 2026-10-09 已追加授权使用本地电脑，并允许安装必要 C++ Build Tools 与确认 UAC。因此 Windows 构建改用受控本地目录 `D:/aliyun/CrossLink/.build`，源码与最终归档仍在服务器；该授权是此前不在本机安装开发环境的明确例外。没有可用工具链时不以 Web 或源码包替代。依据：[Flutter Windows 环境文档](https://docs.flutter.dev/platform-integration/windows/setup)。
 
 第一轮交付边界：单文件上限暂保留 100 MiB、文件默认保留 7 天、文字/链接复制粘贴同步和手动剪贴板补充入口、固定平台中转。用户 2026-10-09 补充“不要忘记复制粘贴同步”，因此自动文本剪贴板能力调整为首版 C4，不再放在远期增强。原设计第 39 节建议的 2 GB 尚未实现，必须在流式收发、容量控制和续传能力成熟后提升；可选保留期也列入后续增强。不要将这些差距写成已经完成。
 
@@ -177,8 +177,8 @@ Windows 原生监听依据：[Microsoft 剪贴板监听接口](https://learn.mic
 
 **Interfaces:** 构建脚本新增 `-Channel qa|production` 和 `-PackageInstaller` 参数。输入为已提交源码、锁定依赖、对应构建配置；输出 exe 与完整运行时 ZIP、用户级安装程序、版本/提交/哈希清单。所有产物回传 `/home/CrossLink/artifacts/0.3.0/`。
 
-- [ ] 先核对获准远端 Windows 节点：SSH、Git、Visual Studio C++、Windows SDK、足够空间；记录 `flutter doctor -v`。缺失节点如实列为依赖，不自动采购或改用本机大规模安装。
-- [ ] 从阿里云提交打包源码，经 SSH 传入节点的受控工作目录；环境信息和构建日志回传服务器，产物清单记录源提交。
+- [ ] 先核对已获准的本地 Windows 构建环境：Git、Visual Studio C++、Windows SDK、足够空间；记录 `flutter doctor -v`。当前缺少 C++ 工具链，用户已明确授权受控安装；不采购额外节点。
+- [ ] 从阿里云提交打包源码，经 SSH/SCP 传入本地 `.build` 的受控工作目录；环境信息和构建日志回传服务器，产物清单记录源提交。
 - [ ] 使用现有固定 Flutter 提交进行 analyze/test/release 构建，修复仅 Windows 编译或运行时才暴露的问题。
 - [ ] 首先交付包含 `crosslink.exe`、DLL、data/assets 的完整 ZIP，在无 Flutter 开发环境的干净 Windows 中启动验证。
 - [ ] 使用 Inno Setup 封装当前用户安装程序，创建开始菜单、卸载入口，升级保留配置；默认不索取管理员权限。设置依据：[PrivilegesRequired=lowest](https://jrsoftware.org/ishelp/topic_setup_privilegesrequired.htm)。
