@@ -1,21 +1,16 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
 import 'clipboard_sync.dart';
-import 'build_info.dart';
+import 'desktop_bridge.dart';
 
 import 'package:flutter/services.dart';
-import 'package:local_notifier/local_notifier.dart';
-import 'package:window_manager/window_manager.dart';
-import 'package:tray_manager/tray_manager.dart' as tray;
 
-class PlatformBridge with WindowListener {
+class PlatformBridge {
   static const channel = MethodChannel('crosslink/native');
-  tray.TrayIcon? _tray;
-  tray.Menu? _menu;
+  final DesktopBridge _desktop = desktopBridgeFactory();
   Future<void> Function(Map<String, dynamic>)? onShare;
   Future<void> Function(Map<String, dynamic>)? onBackground;
   Future<void> Function()? onClipboard;
@@ -66,26 +61,25 @@ class PlatformBridge with WindowListener {
       });
     }
     if (windows) {
-      await windowManager.ensureInitialized();
-      await windowManager.setTitle(appName);
-      await windowManager.setPreventClose(true);
-      windowManager.addListener(this);
-      await localNotifier.setup(
-        appName: appName,
-        shortcutPolicy: ShortcutPolicy.requireCreate,
-      );
-      _tray = tray.TrayIcon.create();
-      if (_tray != null) {
-        _tray!.icon = tray.ImageAsset.fromAsset('assets/tray.png');
-        _tray!.setTooltip('CrossLink · 跨设备同步');
-        updateTray(false, const []);
-        _tray!.setVisible(true);
-        _tray!.addListener((event) {
-          if (event is tray.TrayIconClickedEvent) unawaited(_safe(show));
-        });
-      } else {
-        await channel.invokeMethod<void>('showWindow');
+      if (!_desktop.available) {
+        throw const FormatException('当前 Windows 构建缺少桌面入口，请使用安装包');
       }
+      _desktop.onClipboard = () async {
+        await onClipboard?.call();
+      };
+      _desktop.onFiles = () async {
+        await onFiles?.call();
+      };
+      _desktop.onExit = () async {
+        await onExit?.call();
+      };
+      _desktop.onTogglePause = () async {
+        await onTogglePause?.call();
+      };
+      _desktop.onNavigate = (index, messageId) async {
+        await onNavigate?.call(index, messageId);
+      };
+      await _desktop.initialize();
     }
     if (android) {
       await channel.invokeMethod<void>('requestNotifications');
@@ -97,57 +91,7 @@ class PlatformBridge with WindowListener {
   }
 
   void updateTray(bool paused, List<Map<String, dynamic>> devices) {
-    if (!windows || _tray == null) return;
-    final old = _menu;
-    _menu = tray.Menu.create();
-    void item(String label, Future<void> Function() action) {
-      final entry = tray.MenuItem.createWithLabelAndType(
-        label,
-        tray.MenuItemType.normal,
-      );
-      if (entry != null) {
-        entry.addListener((event) {
-          if (event is tray.MenuItemClickedEvent) unawaited(_safe(action));
-        });
-        _menu!.addItem(entry);
-      }
-    }
-
-    item('打开 CrossLink', show);
-    item('我的设备（${devices.length}）', () async {
-      await onNavigate?.call(1, null);
-      await show();
-    });
-    for (final device in devices.take(8)) {
-      item(
-        '${device['online'] == true ? '●' : '○'} ${device['name']}',
-        () async {
-          await onNavigate?.call(1, null);
-          await show();
-        },
-      );
-    }
-    item('设置', () async {
-      await onNavigate?.call(5, null);
-      await show();
-    });
-    item(paused ? '恢复同步' : '暂停同步', () async {
-      await onTogglePause?.call();
-    });
-    item('发送剪贴板', () async {
-      await onClipboard?.call();
-    });
-    item('发送文件', () async {
-      await show();
-      await onFiles?.call();
-    });
-    _menu!.addSeparator();
-    item('退出', () async {
-      await onExit?.call();
-      await windowManager.destroy();
-    });
-    _tray!.setContextMenu(_menu!);
-    old?.dispose();
+    if (windows) _desktop.updateTray(paused, devices);
   }
 
   Future<Map<String, dynamic>> startupSettings() async =>
@@ -230,34 +174,13 @@ class PlatformBridge with WindowListener {
 
   Future<void> stopBackground() => channel.invokeMethod<void>('backgroundStop');
 
-  Future<void> _safe(Future<void> Function() action) async {
-    try {
-      await action();
-    } catch (_) {}
-  }
-
   Future<void> show() async {
-    if (windows) {
-      await windowManager.show();
-      await windowManager.focus();
-    }
-  }
-
-  @override
-  void onWindowClose() {
-    unawaited(_safe(windowManager.hide));
+    if (windows) await _desktop.show();
   }
 
   Future<void> notify(String title, String body, {String? messageId}) async {
     if (windows) {
-      final n = LocalNotification(title: title, body: body);
-      n.onClick = () => unawaited(
-        _safe(() async {
-          await onNavigate?.call(2, messageId);
-          await show();
-        }),
-      );
-      await n.show();
+      await _desktop.notify(title, body, messageId: messageId);
     } else if (android) {
       await channel.invokeMethod<void>('notify', {
         'title': title,
@@ -267,7 +190,6 @@ class PlatformBridge with WindowListener {
   }
 
   void dispose() {
-    if (windows) windowManager.removeListener(this);
-    _tray?.dispose();
+    _desktop.dispose();
   }
 }

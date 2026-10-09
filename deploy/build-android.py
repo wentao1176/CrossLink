@@ -14,6 +14,8 @@ parser.add_argument('--channel',choices=['qa','production'],default='production'
 parser.add_argument('--mode',choices=['debug','release'],default='release')
 parser.add_argument('--build-number',type=int)
 args=parser.parse_args()
+assert not subprocess.check_output(['git','status','--porcelain'],cwd=root).strip(), 'Commit source before building'
+source_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
 configuration=root/('.tools/client-build-qa.json' if args.channel=='qa' else '.tools/client-build.json')
 assert configuration.is_file(), 'Internal platform build configuration is required'
 platform=json.loads(configuration.read_text())
@@ -58,8 +60,9 @@ if result==0:
  directory=root/f'artifacts/{version}/{args.channel}';directory.mkdir(parents=True,exist_ok=True)
  suffix='-qa' if args.channel=='qa' else ''
  name=f'CrossLink-{version}-android-arm64-{args.mode}{suffix}.apk';shutil.copy2(apk,directory/name)
- commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
- manifest={'version':version,'channel':args.channel,'mode':args.mode,'source_commit':commit,'configuration_sha256':hashlib.sha256(configuration.read_bytes()).hexdigest(),'files':[{'name':name,'bytes':apk.stat().st_size,'sha256':hashlib.sha256(apk.read_bytes()).hexdigest()}]}
+ assert source_commit==subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(), 'Source changed during build'
+ assert not subprocess.check_output(['git','status','--porcelain'],cwd=root).strip(), 'Source changed during build'
+ manifest={'version':version,'channel':args.channel,'mode':args.mode,'source_commit':source_commit,'configuration_sha256':hashlib.sha256(configuration.read_bytes()).hexdigest(),'files':[{'name':name,'bytes':apk.stat().st_size,'sha256':hashlib.sha256(apk.read_bytes()).hexdigest()}]}
  (directory/'android-manifest.json').write_text(json.dumps(manifest,indent=2))
  print('Android artifact ready:',directory/name)
 sys.exit(result)

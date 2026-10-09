@@ -39,13 +39,37 @@ $env:FLUTTER_SUPPRESS_ANALYTICS = 'true'
 $env:PATH = (Join-Path $FlutterRoot 'bin') + ';' + $env:PATH
 Push-Location (Join-Path $projectRoot 'client')
 try {
-    & $flutter --no-version-check pub get --enforce-lockfile
-    if ($LASTEXITCODE) { throw 'Locked dependencies failed.' }
+    $links = Join-Path $projectRoot 'client\windows\flutter\ephemeral\.plugin_symlinks'
+    $scope = $buildDirectory.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    if (!( [IO.Path]::GetFullPath($links)).StartsWith($scope,[StringComparison]::OrdinalIgnoreCase)) { throw 'Plugin links must stay within BuildRoot.' }
+    if (Test-Path -LiteralPath $links) {
+        foreach ($entry in (Get-ChildItem -LiteralPath $links -Force)) {
+            if ($entry.LinkType -notin 'Junction','SymbolicLink') { throw 'Unexpected non-link item in plugin link directory.' }
+            if (!([IO.Path]::GetFullPath([string]@($entry.Target)[0])).StartsWith($scope,[StringComparison]::OrdinalIgnoreCase)) { throw 'Plugin target outside BuildRoot; leave it untouched.' }
+            Remove-Item -LiteralPath $entry.FullName -Force
+        }
+    }
+    $dependencyOutput = & $flutter --no-version-check pub get --enforce-lockfile 2>&1
+    $dependencyCode = $LASTEXITCODE
+    $dependencyOutput | Write-Output
+    if ($dependencyCode) {
+        if (($dependencyOutput -join "`n") -notmatch 'Building with plugins requires symlink support') { throw 'Locked dependencies failed.' }
+        $plugins = (Get-Content -Raw -LiteralPath '.flutter-plugins-dependencies' | ConvertFrom-Json).plugins.windows
+        New-Item -ItemType Directory -Force -Path $links | Out-Null
+        foreach ($plugin in $plugins) {
+            if ($plugin.name -notmatch '^[a-z][a-z0-9_]*$') { throw 'Invalid plugin directory name.' }
+            $target = [IO.Path]::GetFullPath($plugin.path)
+            if (!$target.StartsWith($scope,[StringComparison]::OrdinalIgnoreCase)) { throw 'Plugin cache must stay within BuildRoot.' }
+            $link = Join-Path $links $plugin.name
+            if (!(Test-Path -LiteralPath $link)) { New-Item -ItemType Junction -Path $link -Target $target | Out-Null }
+        }
+        Write-Output 'Locked packages restored; using project-local Windows junctions without Developer Mode.'
+    }
     & $flutter --no-version-check analyze --no-pub
     if ($LASTEXITCODE) { throw 'Analysis failed.' }
     & $flutter --no-version-check test --no-pub
     if ($LASTEXITCODE) { throw 'Windows-host tests failed.' }
-    & $flutter --no-version-check build windows --release --no-pub "--dart-define-from-file=$config"
+    & $flutter --no-version-check build windows --release --no-pub --target=lib/main_windows.dart "--dart-define-from-file=$config"
     if ($LASTEXITCODE) { throw 'Windows build failed.' }
     $releaseDir = Join-Path $projectRoot 'client\build\windows\x64\runner\Release'
     if (!(Test-Path -LiteralPath (Join-Path $releaseDir 'crosslink.exe'))) { throw 'Release executable is missing.' }
