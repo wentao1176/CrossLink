@@ -37,3 +37,4 @@
 - Device names survive sign-in and revocation; current-device display follows remote rename, and stale reloads cannot repopulate a logged-out session.
 - Delivery/read receipts reach senders in real time over both transports; reconnect history reconciles missed updates and stale events cannot restore logged-out history.
 - Storage reconciliation reclaims abandoned UUID files after a 24-hour grace period, preserves in-flight uploads and never follows cleanup symlinks.
+- History accepts a validated time/UUID cursor so same-second messages are not lost across pages; legacy timestamp-only requests remain supported.

@@ -1,7 +1,8 @@
 import hashlib
+from uuid import UUID
 from urllib.parse import urlparse
 from fastapi import APIRouter,Depends,Request,Query
-from sqlalchemy import select,or_
+from sqlalchemy import select,or_,and_
 from sqlalchemy.exc import IntegrityError
 from .models import Message,Receipt,Device,Clipboard,File,Transfer,now
 from .schemas import SendMessage
@@ -90,10 +91,14 @@ def pending(p=Depends(principal),db=Depends(get_db),limit:int=Query(100,ge=1,le=
     rows=db.scalars(select(Message).join(Receipt,Message.id==Receipt.message_id).where(Receipt.device_id==p.device.id,Receipt.status=="pending",Message.user_id==p.user.id).order_by(Message.created_at,Message.id).limit(limit))
     return [view(db,m,p.device.id) for m in rows]
 @router.get("/messages")
-def history(p=Depends(principal),db=Depends(get_db),limit:int=Query(100,ge=1,le=500),before:int|None=None):
+def history(p=Depends(principal),db=Depends(get_db),limit:int=Query(100,ge=1,le=500),before:int|None=None,before_id:UUID|None=Query(default=None)):
     ids=select(Receipt.message_id).where(Receipt.device_id==p.device.id)
     query=select(Message).where(Message.user_id==p.user.id,or_(Message.sender_device_id==p.device.id,Message.id.in_(ids)))
-    if before is not None:query=query.where(Message.created_at<before)
+    if before_id is not None and before is None:fail(422,"INVALID_CURSOR","before is required with before_id")
+    if before is not None:
+        boundary=Message.created_at<before
+        if before_id is not None:boundary=or_(boundary,and_(Message.created_at==before,Message.id<str(before_id)))
+        query=query.where(boundary)
     return [view(db,m,p.device.id) for m in db.scalars(query.order_by(Message.created_at.desc(),Message.id.desc()).limit(limit))]
 @router.post("/messages/{message_id}/ack")
 async def ack(message_id:str,request:Request,p=Depends(principal),db=Depends(get_db)):

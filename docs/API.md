@@ -24,3 +24,5 @@ Supported types: text, clipboard, url, notification, file, image. Text payload `
 Per-device receipt states: pending → delivered → read. Sender history aggregates states across recipients; sending to no other device leaves sender history as sent. A websocket write does not mark delivered: only receiver ACK does. A repeated client_message_id must have identical type/target/payload or gets 409. History is capped to 100 entries in the client; server retains message records without a purge policy in this MVP.
 
 ACK/read via REST and websocket publish `message.receipt.updated` to the sending device after commit. Broadcast aggregate becomes delivered when all recipients have ACKed, and read when all have read. Receiver ACK responses remain compatible.
+
+History continuation: pass both `before=last.created_at` and `before_id=last.id` from the last row to preserve messages created in the same second. Invalid UUID or before_id without before returns 422. Before-only requests retain legacy strict timestamp filtering. Visibility remains account/device scoped.

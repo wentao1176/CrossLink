@@ -3,7 +3,7 @@ import hashlib,json,os,secrets,subprocess,time,uuid,ssl
 from pathlib import Path
 import httpx
 from websockets.sync.client import connect
-from sqlalchemy import create_engine,delete,select
+from sqlalchemy import create_engine,delete,select,update
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"server"))
 from app.config import Settings
@@ -71,6 +71,23 @@ try:
             assert mid in seen
         assert client.get(f"/api/v1/files/{f['id']}/download",headers=headers(b)).content==data
         print("PASS: API restart preserves credentials, pending replay and stored files")
+    # Preserve an explicitly renamed device when its stale automatic name reappears at login.
+    devices=check(client.get("/api/v1/devices",headers=headers(a)))
+    phone=next(d for d in devices if d["id"]==b["device_id"])
+    check(client.patch("/api/v1/devices/"+b["device_id"],headers=headers(a),json={"device_name":"Custom phone"}))
+    b=check(client.post("/api/v1/auth/login",json={"account":username,"password":password,"device":{"device_uuid":phone["device_uuid"],"device_name":"Phone","platform":"android"}}))
+    assert next(d for d in check(client.get("/api/v1/devices",headers=headers(b))) if d["id"]==b["device_id"])["name"]=="Custom phone"
+    # Force only disposable test messages onto a same-second boundary; verify real PostgreSQL ordering.
+    ids=[check(client.post("/api/v1/messages",headers=headers(a),json={"target_device_id":b["device_id"],"type":"text","payload":{"content":"cursor test"}}),201)["id"] for _ in range(3)]
+    settings=Settings();test_engine=create_engine(settings.database_url)
+    try:
+        with DB(test_engine) as db:
+            db.execute(update(Message).where(Message.id.in_(ids),Message.user_id==user_ids[0]).values(created_at=1700000000));db.commit()
+    finally:test_engine.dispose()
+    first=check(client.get("/api/v1/messages",headers=headers(a),params={"limit":2,"before":1700000001}))
+    second=check(client.get("/api/v1/messages",headers=headers(a),params={"limit":2,"before":first[-1]["created_at"],"before_id":first[-1]["id"]}))
+    assert [m["id"] for m in first+second]==sorted(ids,reverse=True)
+    print("PASS: custom device name survives sign-in; real PostgreSQL same-second history cursor")
     check(client.delete("/api/v1/devices/"+b["device_id"],headers=headers(a)),204)
     check(client.get("/api/v1/devices",headers=headers(b)),401)
     check(client.post("/api/v1/auth/refresh",json={"refresh_token":b["refresh_token"]}),401)

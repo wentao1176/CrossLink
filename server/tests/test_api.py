@@ -404,3 +404,50 @@ with TestClient(app) as client:
         os.utime(orphan[0], (old, old))
         cleanup(app.state.factory, app.state.settings)
         assert not orphan[0].exists()
+
+def test_history_composite_cursor_keeps_same_second_messages(client):
+    from sqlalchemy import update
+    from app.models import Message
+    a = login(client)
+    ids = [send(client, a).json()["id"] for _ in range(3)]
+    with client.app.state.factory() as db:
+        db.execute(update(Message).where(Message.id.in_(ids))
+                   .values(created_at=1700000000))
+        db.commit()
+    page1 = client.get("/api/v1/messages", headers=auth(a),
+                       params={"limit": 2}).json()
+    page2 = client.get("/api/v1/messages", headers=auth(a), params={
+        "limit": 2, "before": page1[-1]["created_at"],
+        "before_id": page1[-1]["id"]}).json()
+    assert len(page1) == 2
+    assert len(page2) == 1
+    found = [m["id"] for m in page1 + page2]
+    assert found == sorted(ids, reverse=True)
+
+@pytest.mark.parametrize("params", [
+    {"before_id": "not-a-uuid", "before": 1700000000},
+    {"before_id": "11111111-1111-1111-1111-111111111111"}])
+def test_history_rejects_invalid_cursor(client, params):
+    a = login(client)
+    assert client.get("/api/v1/messages", headers=auth(a), params=params).status_code == 422
+
+
+def test_history_pages_do_not_include_foreign_accounts(client):
+    from sqlalchemy import update
+    from app.models import Message
+    a = login(client)
+    b = login(client, username="bob")
+    owned = [send(client, a).json()["id"] for _ in range(5)]
+    foreign = [send(client, b).json()["id"] for _ in range(2)]
+    with client.app.state.factory() as db:
+        db.execute(update(Message).values(created_at=1700000000)); db.commit()
+    seen = []
+    params = {"limit": 2}
+    for _ in range(5):
+        page = client.get("/api/v1/messages", headers=auth(a), params=params).json()
+        if not page:break
+        seen.extend(m["id"] for m in page)
+        params.update(before=page[-1]["created_at"], before_id=page[-1]["id"])
+    assert seen == sorted(owned, reverse=True)
+    assert not set(foreign).intersection(seen)
+    assert len(seen) == len(set(seen))
