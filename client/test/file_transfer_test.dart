@@ -1,3 +1,5 @@
+import 'test_paths.dart';
+
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -26,7 +28,7 @@ void main() {
       'stream verified ${fixture.$1} bytes without a whole-file save payload',
       () async {
         HttpOverrides.global = null;
-        final root = Directory('/home/CrossLink/.tools/test-transfer-cache');
+        final root = transferTestRoot();
         await root.create(recursive: true);
         final directory = await root.createTemp('transfer-test-');
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -74,7 +76,7 @@ void main() {
   for (final mode in ['hash', 'limit', 'cancel']) {
     test('$mode failure removes its partial download', () async {
       HttpOverrides.global = null;
-      final root = Directory('/home/CrossLink/.tools/test-transfer-cache');
+      final root = transferTestRoot();
       await root.create(recursive: true);
       final directory = await root.createTemp('failure-test-');
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

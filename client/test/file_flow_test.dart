@@ -1,3 +1,5 @@
+import 'test_paths.dart';
+
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -7,7 +9,7 @@ import 'controller_harness.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   test('one shared file failure retains it and does not prevent the next file send', () async {
-    final root = Directory('/home/CrossLink/.tools/test-transfer-cache');
+    final root = transferTestRoot();
     await root.create(recursive: true);
     final directory = await root.createTemp('share-test-');
     final first = await File('${directory.path}/first').writeAsString('first');

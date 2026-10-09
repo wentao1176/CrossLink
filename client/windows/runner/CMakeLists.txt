@@ -34,6 +34,10 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_BUILD=${FLUTT
 # Disable Windows macros that collide with C++ standard library functions.
 target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 
+if("$ENV{CROSSLINK_BUILD_CHANNEL}" STREQUAL "qa")
+  target_compile_definitions(${BINARY_NAME} PRIVATE CROSSLINK_QA_BUILD)
+endif()
+
 # Add dependency libraries and include directories. Add any application-specific
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)

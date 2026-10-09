@@ -1,3 +1,5 @@
+import 'test_paths.dart';
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -98,9 +100,7 @@ void main() {
               call,
             ) async {
               if (call.method == 'transferDirectory') {
-                final dir = Directory(
-                  '/home/CrossLink/.tools/test-transfer-cache',
-                );
+                final dir = transferTestRoot();
                 await dir.create(recursive: true);
                 return dir.path;
               }

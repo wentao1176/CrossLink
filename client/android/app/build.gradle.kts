@@ -1,13 +1,27 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val crosslinkChannel = providers.environmentVariable("CROSSLINK_BUILD_CHANNEL").orElse("production").get()
+require(crosslinkChannel in listOf("qa","production")) { "Invalid build channel" }
+val releasePropertiesFile = file(providers.environmentVariable("CROSSLINK_SIGNING_PROPERTIES").orElse(rootProject.file("../../.tools/signing/key.properties").absolutePath).get())
+val releaseProperties = Properties().apply { if(releasePropertiesFile.isFile) releasePropertiesFile.inputStream().use { load(it) } }
+val hasReleaseSigning = releasePropertiesFile.isFile && listOf("storeFile","storePassword","keyAlias","keyPassword").all { !releaseProperties.getProperty(it).isNullOrBlank() }
+gradle.taskGraph.whenReady {
+ if(allTasks.any { it.project == project && it.name.contains("Release") }) {
+  check(hasReleaseSigning) { "CrossLink release signing configuration is required; debug signing is forbidden" }
+ }
+}
+
 android {
     namespace = "com.crosslink.crosslink"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
+    buildFeatures { resValues = true }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -16,7 +30,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.crosslink.crosslink"
+        applicationId = if(crosslinkChannel == "qa") "com.crosslink.crosslink.qa" else "com.crosslink.crosslink"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -26,14 +40,24 @@ android {
         // You can force using the value of versionCode by specifying the `-P force-version-code-ignoring-abi=true`
         // flag during build.
         versionCode = flutter.versionCode
-        versionName = flutter.versionName
+        versionName = flutter.versionName + if(crosslinkChannel == "qa") "-qa" else ""
+        resValue("string","app_name",if(crosslinkChannel == "qa") "CrossLink QA" else "CrossLink")
     }
 
+    signingConfigs {
+        create("crosslinkRelease") {
+            if(hasReleaseSigning) {
+                storeFile=file(releaseProperties.getProperty("storeFile"))
+                storePassword=releaseProperties.getProperty("storePassword")
+                keyAlias=releaseProperties.getProperty("keyAlias")
+                keyPassword=releaseProperties.getProperty("keyPassword")
+            }
+        }
+    }
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("crosslinkRelease")
+            isDebuggable = false
         }
     }
 }

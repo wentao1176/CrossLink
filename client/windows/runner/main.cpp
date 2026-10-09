@@ -9,6 +9,8 @@
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
+  const auto arguments=GetCommandLineArguments();
+  if(std::find(arguments.begin(),arguments.end(),"--remove-startup")!=arguments.end())return crosslink::WriteStartup(false,false)?EXIT_SUCCESS:EXIT_FAILURE;
   const auto identity=crosslink::InstanceIdentity();
   HANDLE instance_mutex=CreateMutexW(nullptr,FALSE,(L"Local\\"+identity).c_str());
   if(instance_mutex==nullptr)return EXIT_FAILURE;

@@ -12,6 +12,7 @@ import 'package:uuid/uuid.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'api.dart';
+import 'build_info.dart';
 import 'clipboard_sync.dart';
 import 'file_transfer.dart' as transfer;
 import 'protocol.dart';
@@ -140,13 +141,18 @@ class CrossLinkController extends ChangeNotifier {
         if (android) notificationsAllowed = await bridge.notificationsEnabled();
       } catch (e) {
         error = '系统集成功能暂不可用：${userError(e)}';
+        if (windows) {
+          try {
+            await PlatformBridge.channel.invokeMethod<void>('showWindow');
+          } catch (_) {}
+        }
       }
       if (!kIsWeb) {
         final nativeSession = android
             ? await bridge.backgroundSnapshot()
             : null;
         final saved = nativeSession == null
-            ? await storage.read(key: 'crosslink_session')
+            ? await storage.read(key: sessionStorageKey)
             : jsonEncode(nativeSession);
         if (saved != null) {
           final value = Map<String, dynamic>.from(jsonDecode(saved));
@@ -213,7 +219,7 @@ class CrossLinkController extends ChangeNotifier {
         deviceId = tokens['device_id'];
         if (!kIsWeb) {
           await storage.write(
-            key: 'crosslink_session',
+            key: sessionStorageKey,
             value: jsonEncode({'endpoint': endpoint, 'tokens': tokens}),
           );
         }
@@ -431,7 +437,7 @@ class CrossLinkController extends ChangeNotifier {
                 : windows
                 ? 'windows'
                 : 'web',
-            'app_version': '0.2.0',
+            'app_version': appVersion,
           },
         },
       );
@@ -1144,7 +1150,7 @@ class CrossLinkController extends ChangeNotifier {
     api?.tokens = null;
     await shutdown(discardClipboard: true);
     if (android) await bridge.stopBackground();
-    if (!kIsWeb) await storage.delete(key: 'crosslink_session');
+    if (!kIsWeb) await storage.delete(key: sessionStorageKey);
     api?.tokens = null;
     cache.clear();
     devices = [];

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'controller.dart';
+import 'build_info.dart';
 import 'protocol.dart';
 import 'file_limits.dart';
 
@@ -26,7 +27,7 @@ class CrossLinkApp extends ConsumerWidget {
     final controller = ref.watch(controllerProvider);
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'CrossLink',
+      title: appName,
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff087f8c)),
@@ -829,7 +830,7 @@ class _HomeScreenState extends State<HomeScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'CrossLink 0.2.0',
+          '$appName $appVersion',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20),
         ),
         const SizedBox(height: 20),

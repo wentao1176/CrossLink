@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import 'clipboard_sync.dart';
+import 'build_info.dart';
 
 import 'package:flutter/services.dart';
 import 'package:local_notifier/local_notifier.dart';
@@ -66,11 +67,11 @@ class PlatformBridge with WindowListener {
     }
     if (windows) {
       await windowManager.ensureInitialized();
-      await windowManager.setTitle('CrossLink');
+      await windowManager.setTitle(appName);
       await windowManager.setPreventClose(true);
       windowManager.addListener(this);
       await localNotifier.setup(
-        appName: 'CrossLink',
+        appName: appName,
         shortcutPolicy: ShortcutPolicy.requireCreate,
       );
       _tray = tray.TrayIcon.create();
