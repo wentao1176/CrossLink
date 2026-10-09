@@ -67,7 +67,8 @@ class CrossLinkController extends ChangeNotifier {
       await prefs.remove('endpoint');
       deviceUuid = prefs.getString('device_uuid') ?? const Uuid().v4();
       await prefs.setString('device_uuid', deviceUuid);
-      deviceName = prefs.getString('device_name') ?? await bridge.deviceName();
+      deviceName = await bridge.deviceName();
+      await prefs.remove('device_name');
       bridge.onBackground = _handleBackground;
       bridge.onShare = (value) async {
         if (value['error'] != null) {
@@ -171,7 +172,7 @@ class CrossLinkController extends ChangeNotifier {
       } on FormatException {
         throw const FormatException('平台暂时无法连接，请稍后重试');
       }
-      if (deviceName.isEmpty) deviceName = await bridge.deviceName();
+      deviceName = await bridge.deviceName();
       final identityKey = deviceProfileKey(endpoint, account);
       deviceUuid = prefs.getString(identityKey) ?? const Uuid().v4();
       await shutdown();
@@ -207,7 +208,7 @@ class CrossLinkController extends ChangeNotifier {
       );
       await api!.accept(Map<String, dynamic>.from(response.data));
       await prefs.setString(identityKey, deviceUuid);
-      await prefs.setString('device_name', deviceName);
+      await prefs.setString('device_name_$deviceId', deviceName);
       _loadCache();
       await reload();
       await connect();
@@ -232,6 +233,7 @@ class CrossLinkController extends ChangeNotifier {
   }
 
   void _loadCache() {
+    deviceName = prefs.getString('device_name_$deviceId') ?? deviceName;
     cache.clear();
     final saved = prefs.getString('history_$deviceId');
     if (saved != null) {
@@ -247,15 +249,49 @@ class CrossLinkController extends ChangeNotifier {
     await prefs.setString('history_$deviceId', jsonEncode(cache.items));
   }
 
+  void _applyDeviceList(List<Map<String, dynamic>> list) {
+    devices = list;
+    for (final device in list) {
+      if (device['id'] == deviceId && device['name'] is String) {
+        deviceName = device['name'];
+        unawaited(prefs.setString('device_name_$deviceId', deviceName));
+      }
+    }
+    if (target != null && !list.any((d) => d['id'] == target)) target = null;
+  }
+
+  Future<void> _refreshDevices() async {
+    if (!signedIn) return;
+    final activeApi = api!;
+    final session = _sessionGeneration;
+    final list = await activeApi.list('/devices');
+    if (disposed ||
+        !signedIn ||
+        api != activeApi ||
+        session != _sessionGeneration) {
+      return;
+    }
+    _applyDeviceList(list);
+    update();
+  }
+
   Future<void> reload() async {
     if (!signedIn) return;
+    final activeApi = api!;
+    final session = _sessionGeneration;
     final data = await Future.wait([
-      api!.list('/devices'),
-      api!.list('/messages'),
-      api!.list('/transfers'),
-      api!.list('/clipboard'),
+      activeApi.list('/devices'),
+      activeApi.list('/messages'),
+      activeApi.list('/transfers'),
+      activeApi.list('/clipboard'),
     ]);
-    devices = data[0];
+    if (disposed ||
+        !signedIn ||
+        api != activeApi ||
+        session != _sessionGeneration) {
+      return;
+    }
+    _applyDeviceList(data[0]);
     transfers = data[2];
     clips = data[3];
     for (final m in data[1].reversed) {
@@ -380,7 +416,7 @@ class CrossLinkController extends ChangeNotifier {
         }
       });
       await pullPending();
-      devices = await api!.list('/devices');
+      await _refreshDevices();
       update();
     } catch (e) {
       error = userError(e);
@@ -449,7 +485,7 @@ class CrossLinkController extends ChangeNotifier {
       ].contains(event)) {
         await _receive(Map<String, dynamic>.from(value['data']));
       } else if (event.startsWith('device.')) {
-        devices = await api!.list('/devices');
+        await _refreshDevices();
       }
     }
     update();
@@ -475,7 +511,7 @@ class CrossLinkController extends ChangeNotifier {
       ].contains(event)) {
         await _receive(Map<String, dynamic>.from(data['data']));
       } else if (event.startsWith('device.')) {
-        devices = await api!.list('/devices');
+        await _refreshDevices();
         update();
       }
     } catch (e) {

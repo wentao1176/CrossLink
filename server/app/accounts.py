@@ -27,7 +27,7 @@ async def login(body:Login,request:Request,db=Depends(get_db)):
     if not device:
         device=Device(user_id=user.id,**body.device.model_dump());db.add(device)
     else:
-        for k,v in body.device.model_dump().items():setattr(device,k,v)
+        for k,v in body.device.model_dump(exclude={"device_uuid","device_name"}).items():setattr(device,k,v)
         device.revoked=False
         db.execute(update(Session).where(Session.device_id==device.id).values(revoked=True))
     device.last_seen=now()

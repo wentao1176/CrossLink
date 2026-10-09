@@ -247,3 +247,21 @@ def test_unexpected_error_is_sanitized_and_has_request_id(tmp_path, caplog):
     assert response.json() == {"code": "INTERNAL_ERROR", "message": "Internal server error", "details": {}}
     assert response.headers.get("X-Request-ID")
     assert "SECRET_TOKEN_must_not_leak" not in response.text + caplog.text
+
+@pytest.mark.parametrize("revoked", [False, True])
+def test_custom_device_name_survives_relogin(client, revoked):
+    a = login(client)
+    b = login(client, device="Phone", register=False)
+    devices = client.get("/api/v1/devices", headers=auth(a)).json()
+    phone = next(d for d in devices if d["id"] == b["device_id"])
+    assert client.patch("/api/v1/devices/" + b["device_id"],
+        headers=auth(a), json={"device_name": "My phone"}).status_code == 200
+    if revoked:
+        assert client.delete("/api/v1/devices/" + b["device_id"], headers=auth(a)).status_code == 204
+    result = client.post("/api/v1/auth/login", json={
+        "account": "alice", "password": "LongPassword123!",
+        "device": {"device_uuid": phone["device_uuid"],
+                   "device_name": "Phone", "platform": "android"}})
+    assert result.status_code == 200
+    names = client.get("/api/v1/devices", headers=auth(result.json())).json()
+    assert next(d for d in names if d["id"] == b["device_id"])["name"] == "My phone"
