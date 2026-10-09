@@ -35,8 +35,9 @@ class ControllerHarness {
     h.messenger.setMockMethodCallHandler(
       const MethodChannel('crosslink/native'),
       (call) async {
-        if (call.method.startsWith('clipboard') && nativeResponder != null) {
-          return nativeResponder(call);
+        if (nativeResponder != null) {
+          final value = await nativeResponder(call);
+          if (value != null) return value;
         }
         if (call.method == 'deviceName') return 'Phone';
         if (call.method == 'backgroundStart') {

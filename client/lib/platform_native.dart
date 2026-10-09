@@ -20,6 +20,8 @@ class PlatformBridge with WindowListener {
   Future<void> Function()? onClipboard;
   Future<void> Function()? onFiles;
   Future<void> Function()? onExit;
+  Future<void> Function()? onTogglePause;
+  Future<void> Function(int, String?)? onNavigate;
   Future<void> Function(Map<String, dynamic>)? onClipboardChange;
   Future<void> Function(Map<String, dynamic>)? onClipboardFocus;
   bool get clipboardSupported => windows || android;
@@ -75,38 +77,13 @@ class PlatformBridge with WindowListener {
       if (_tray != null) {
         _tray!.icon = tray.ImageAsset.fromAsset('assets/tray.png');
         _tray!.setTooltip('CrossLink · 跨设备同步');
-        _menu = tray.Menu.create();
-        void item(String label, Future<void> Function() action) {
-          final entry = tray.MenuItem.createWithLabelAndType(
-            label,
-            tray.MenuItemType.normal,
-          );
-          if (entry != null) {
-            entry.addListener((event) {
-              if (event is tray.MenuItemClickedEvent) unawaited(_safe(action));
-            });
-            _menu!.addItem(entry);
-          }
-        }
-
-        item('打开 CrossLink', show);
-        item('发送剪贴板', () async {
-          await onClipboard?.call();
-        });
-        item('发送文件', () async {
-          await show();
-          await onFiles?.call();
-        });
-        _menu!.addSeparator();
-        item('退出', () async {
-          await onExit?.call();
-          await windowManager.destroy();
-        });
-        _tray!.setContextMenu(_menu!);
+        updateTray(false, const []);
         _tray!.setVisible(true);
         _tray!.addListener((event) {
           if (event is tray.TrayIconClickedEvent) unawaited(_safe(show));
         });
+      } else {
+        await channel.invokeMethod<void>('showWindow');
       }
     }
     if (android) {
@@ -117,6 +94,76 @@ class PlatformBridge with WindowListener {
       }
     }
   }
+
+  void updateTray(bool paused, List<Map<String, dynamic>> devices) {
+    if (!windows || _tray == null) return;
+    final old = _menu;
+    _menu = tray.Menu.create();
+    void item(String label, Future<void> Function() action) {
+      final entry = tray.MenuItem.createWithLabelAndType(
+        label,
+        tray.MenuItemType.normal,
+      );
+      if (entry != null) {
+        entry.addListener((event) {
+          if (event is tray.MenuItemClickedEvent) unawaited(_safe(action));
+        });
+        _menu!.addItem(entry);
+      }
+    }
+
+    item('打开 CrossLink', show);
+    item('我的设备（${devices.length}）', () async {
+      await onNavigate?.call(1, null);
+      await show();
+    });
+    for (final device in devices.take(8)) {
+      item(
+        '${device['online'] == true ? '●' : '○'} ${device['name']}',
+        () async {
+          await onNavigate?.call(1, null);
+          await show();
+        },
+      );
+    }
+    item('设置', () async {
+      await onNavigate?.call(5, null);
+      await show();
+    });
+    item(paused ? '恢复同步' : '暂停同步', () async {
+      await onTogglePause?.call();
+    });
+    item('发送剪贴板', () async {
+      await onClipboard?.call();
+    });
+    item('发送文件', () async {
+      await show();
+      await onFiles?.call();
+    });
+    _menu!.addSeparator();
+    item('退出', () async {
+      await onExit?.call();
+      await windowManager.destroy();
+    });
+    _tray!.setContextMenu(_menu!);
+    old?.dispose();
+  }
+
+  Future<Map<String, dynamic>> startupSettings() async =>
+      Map<String, dynamic>.from(
+        await channel.invokeMethod<dynamic>('startupRead') ?? const {},
+      );
+  Future<void> setStartup(bool enabled, bool minimized) =>
+      channel.invokeMethod<void>('startupWrite', {
+        'enabled': enabled,
+        'minimized': minimized,
+      });
+  Future<bool> notificationsEnabled() async =>
+      await channel.invokeMethod<bool>('notificationsEnabled') ?? true;
+  Future<void> pauseBackground() =>
+      channel.invokeMethod<void>('backgroundPause');
+  Future<void> resumeBackground() =>
+      channel.invokeMethod<void>('backgroundResume');
 
   Future<bool> watchClipboard(bool enabled, String owner) async =>
       await channel.invokeMethod<bool>('clipboardWatch', {
@@ -200,10 +247,15 @@ class PlatformBridge with WindowListener {
     unawaited(_safe(windowManager.hide));
   }
 
-  Future<void> notify(String title, String body) async {
+  Future<void> notify(String title, String body, {String? messageId}) async {
     if (windows) {
       final n = LocalNotification(title: title, body: body);
-      n.onClick = () => unawaited(_safe(show));
+      n.onClick = () => unawaited(
+        _safe(() async {
+          await onNavigate?.call(2, messageId);
+          await show();
+        }),
+      );
       await n.show();
     } else if (android) {
       await channel.invokeMethod<void>('notify', {

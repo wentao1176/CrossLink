@@ -9,6 +9,8 @@ class PlatformBridge {
   Future<void> Function()? onClipboard;
   Future<void> Function()? onFiles;
   Future<void> Function()? onExit;
+  Future<void> Function()? onTogglePause;
+  Future<void> Function(int, String?)? onNavigate;
   Future<void> Function(Map<String, dynamic>)? onClipboardChange;
   Future<void> Function(Map<String, dynamic>)? onClipboardFocus;
   bool get clipboardSupported => false;
@@ -27,8 +29,14 @@ class PlatformBridge {
     Map<String, dynamic> tokens,
   ) async => tokens;
   Future<void> stopBackground() async {}
+  Future<void> pauseBackground() async {}
+  Future<void> resumeBackground() async {}
+  void updateTray(bool paused, List<Map<String, dynamic>> devices) {}
+  Future<Map<String, dynamic>> startupSettings() async => {};
+  Future<void> setStartup(bool enabled, bool minimized) async {}
+  Future<bool> notificationsEnabled() async => true;
   Future<void> initialize() async {}
   Future<void> show() async {}
-  Future<void> notify(String title, String body) async {}
+  Future<void> notify(String title, String body, {String? messageId}) async {}
   void dispose() {}
 }

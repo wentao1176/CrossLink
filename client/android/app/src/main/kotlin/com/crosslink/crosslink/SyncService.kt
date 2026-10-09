@@ -118,6 +118,7 @@ class SyncService : Service() {
   val currentEpoch = ++epoch
   try {
    val session = SessionStore.read(this) ?: run { stopSelf(); return START_NOT_STICKY }
+   if(!BackgroundSession.mayStart(session)){stopSelf();return START_NOT_STICKY}
    val endpoint = session.getString("endpoint")
    val owner = session.getString("owner")
    session.put("owner", owner)

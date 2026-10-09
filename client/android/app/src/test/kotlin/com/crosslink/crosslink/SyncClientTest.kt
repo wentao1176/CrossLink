@@ -9,6 +9,21 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class SyncClientTest {
+ @Test fun pausedSessionRetainsCredentialsAndResumeGetsFreshOwner() {
+  val original=JSONObject("""{"endpoint":"https://platform","owner":"old","tokens":{"access_token":"access","refresh_token":"refresh","device_id":"phone","_native_owner":"old"}}""")
+  val paused=BackgroundSession.pause(original)
+  assertTrue(paused.getBoolean("paused"))
+  assertFalse(BackgroundSession.mayStart(paused))
+  assertEquals("refresh",paused.getJSONObject("tokens").getString("refresh_token"))
+  assertFalse(original.has("paused"))
+  val resumed=BackgroundSession.resume(paused,"new")
+  assertTrue(BackgroundSession.mayStart(resumed))
+  assertEquals("new",resumed.getString("owner"))
+  assertEquals("new",resumed.getJSONObject("tokens").getString("_native_owner"))
+  assertEquals("phone",resumed.getJSONObject("tokens").getString("device_id"))
+  assertEquals("refresh",resumed.getJSONObject("tokens").getString("refresh_token"))
+ }
+
  @Test fun backgroundSocketAuthenticatesPersistsAndAcknowledges() {
   val server=MockWebServer(); val delivered=CountDownLatch(1);val acknowledged=CountDownLatch(1)
   server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {

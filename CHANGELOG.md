@@ -43,3 +43,5 @@
 - Wire text clipboard sync into native Windows/Android and settings: explicit opt-in, same-account relay, direct target paste, focus-aware Android and session-safe pause. Windows clipboard writes reject changed local sequences.
 - Normal shutdown preserves durable offline clipboard operation IDs; focused reads detect same-text recopy by native sequence and baseline reset counters on restart.
 - Manual sends retain per-device operation IDs across retries, reject late session responses and preserve edited drafts. No-peer UI explains same-account login; Chinese statuses distinguish message delivery from file save completion.
+- Add pause/resume while retaining account credentials, Android durable pause guards and fresh native resume ownership. Add Windows current-user startup/tray options, single-instance activation, device/settings/pause tray actions and notification navigation.
+- Native test runner now fixes all Gradle/SDK paths inside /home/CrossLink regardless of the invoking shell environment.

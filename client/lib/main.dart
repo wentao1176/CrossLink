@@ -229,7 +229,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  int page = 0;
+  int get page => c.pageIndex;
+  set page(int value) => c.pageIndex = value;
   static const labels = ['发送内容', '我的设备', '消息记录', '剪贴板', '文件传输', '设置'];
   static const icons = [
     Icons.send_outlined,
@@ -391,7 +392,17 @@ class _HomeScreenState extends State<HomeScreen> {
       case 2:
         return c.cache.items.isEmpty
             ? empty('还没有消息，选择设备发送第一条内容。', Icons.forum_outlined)
-            : Column(children: c.cache.items.map(messageCard).toList());
+            : Column(
+                children: [
+                  if (c.focusedMessageId != null)
+                    ...c.cache.items
+                        .where((m) => m['id'] == c.focusedMessageId)
+                        .map(messageCard),
+                  ...c.cache.items
+                      .where((m) => m['id'] != c.focusedMessageId)
+                      .map(messageCard),
+                ],
+              );
       case 3:
         return c.clips.isEmpty
             ? empty('复制文字后点击「发送剪贴板」，这里会记录最近内容。', Icons.content_paste)
@@ -504,7 +515,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 12),
             FilledButton.icon(
-              onPressed: c.busy || !c.hasPeers
+              onPressed: c.busy || c.syncPaused || !c.hasPeers
                   ? null
                   : () => c.run(() async {
                       await c.sendMessage(
@@ -527,12 +538,16 @@ class _HomeScreenState extends State<HomeScreen> {
         runSpacing: 12,
         children: [
           OutlinedButton.icon(
-            onPressed: c.busy || !c.hasPeers ? null : c.sendClipboard,
+            onPressed: c.busy || c.syncPaused || !c.hasPeers
+                ? null
+                : c.sendClipboard,
             icon: const Icon(Icons.content_paste_go),
             label: const Text('发送剪贴板'),
           ),
           OutlinedButton.icon(
-            onPressed: c.busy || !c.hasPeers ? null : c.pickFiles,
+            onPressed: c.busy || c.syncPaused || !c.hasPeers
+                ? null
+                : c.pickFiles,
             icon: const Icon(Icons.upload_file),
             label: const Text('发送文件'),
           ),
@@ -550,7 +565,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     '已选择 ${(c.shared?['files'] as List?)?.length ?? 0} 个文件',
               ),
               FilledButton(
-                onPressed: c.busy || !c.hasPeers ? null : c.sendShared,
+                onPressed: c.busy || c.syncPaused || !c.hasPeers
+                    ? null
+                    : c.sendShared,
                 child: const Text('发送分享内容'),
               ),
             ],
@@ -794,7 +811,7 @@ class _HomeScreenState extends State<HomeScreen> {
             c.clipboardSupported ? c.clipboardStatus : '浏览器预览支持手动发送与复制',
           ),
           value: c.clipboardSyncEnabled,
-          onChanged: c.busy || !c.clipboardSupported
+          onChanged: c.busy || c.syncPaused || !c.clipboardSupported
               ? null
               : c.setClipboardSyncEnabled,
         ),
@@ -803,6 +820,35 @@ class _HomeScreenState extends State<HomeScreen> {
         else if (c.windows)
           const Text('开启后，复制文字或链接会同步到同账号设备；电脑驻留托盘时也可同步。'),
         const SizedBox(height: 10),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('暂停同步'),
+          subtitle: const Text('保留登录状态，停止连接和自动复制粘贴；恢复后补收内容。'),
+          value: c.syncPaused,
+          onChanged: c.busy ? null : c.setSyncPaused,
+        ),
+        if (c.windows) ...[
+          SwitchListTile(
+            title: const Text('登录 Windows 后启动'),
+            value: c.startWithWindows,
+            onChanged: c.busy
+                ? null
+                : (value) =>
+                      c.setStartup(enabled: value, minimized: c.startMinimized),
+          ),
+          SwitchListTile(
+            title: const Text('启动到托盘'),
+            value: c.startMinimized,
+            onChanged: c.busy
+                ? null
+                : (value) => c.setStartup(
+                    enabled: c.startWithWindows,
+                    minimized: value,
+                  ),
+          ),
+        ],
+        if (c.android && !c.notificationsAllowed)
+          const Text('通知权限未开启，前台仍可互传；可在系统设置中开启通知。'),
         const Text('文件保留：7 天 · 最大 100 MB'),
         const SizedBox(height: 10),
         const Text('Android 关闭界面后继续接收消息，退出登录会停止同步。'),
@@ -810,7 +856,7 @@ class _HomeScreenState extends State<HomeScreen> {
         const Text('Windows 关闭窗口后继续驻留托盘，托盘菜单可完全退出。'),
         const SizedBox(height: 20),
         OutlinedButton.icon(
-          onPressed: c.busy ? null : () => c.run(c.connect),
+          onPressed: c.busy || c.syncPaused ? null : () => c.run(c.connect),
           icon: const Icon(Icons.sync),
           label: const Text('重新连接'),
         ),

@@ -52,8 +52,13 @@ class CrossLinkController extends ChangeNotifier {
   ClipboardSync? _clipboard;
   String? _clipboardOwner;
   Timer? _clipboardRetry;
-  bool clipboardSyncEnabled = false;
-  String get clipboardStatus => _clipboard?.status ?? '未开启';
+  bool clipboardSyncEnabled = false, syncPaused = false;
+  bool startWithWindows = false, startMinimized = false;
+  int pageIndex = 0;
+  String? focusedMessageId;
+  bool notificationsAllowed = true;
+  String get clipboardStatus =>
+      syncPaused ? '同步已暂停' : _clipboard?.status ?? '未开启';
   bool get clipboardSupported => bridge.clipboardSupported;
   double? progress;
   CancelToken? cancelToken;
@@ -118,8 +123,20 @@ class CrossLinkController extends ChangeNotifier {
       bridge.onClipboard = sendClipboard;
       bridge.onFiles = pickFiles;
       bridge.onExit = shutdown;
+      bridge.onTogglePause = () => setSyncPaused(!syncPaused);
+      bridge.onNavigate = (index, messageId) async {
+        pageIndex = index;
+        focusedMessageId = messageId;
+        update();
+      };
       try {
         await bridge.initialize();
+        if (windows) {
+          final settings = await bridge.startupSettings();
+          startWithWindows = settings['enabled'] == true;
+          startMinimized = settings['minimized'] == true;
+        }
+        if (android) notificationsAllowed = await bridge.notificationsEnabled();
       } catch (e) {
         error = '系统集成功能暂不可用：${userError(e)}';
       }
@@ -137,7 +154,15 @@ class CrossLinkController extends ChangeNotifier {
             api!.tokens = Map<String, dynamic>.from(value['tokens']);
             deviceId = api!.tokens!['device_id'];
             _loadCache();
+            if (nativeSession?['paused'] == true) {
+              syncPaused = true;
+              await prefs.setBool('sync_paused_$deviceId', true);
+            }
             try {
+              if (syncPaused) {
+                connection = '已暂停';
+                return;
+              }
               if (android) {
                 await connect();
                 await reload();
@@ -202,7 +227,7 @@ class CrossLinkController extends ChangeNotifier {
   }
 
   Future<void> _ensureClipboard() async {
-    if (!clipboardSupported || !signedIn) return;
+    if (!clipboardSupported || !signedIn || syncPaused) return;
     if (_clipboard != null) {
       if (clipboardSyncEnabled) await _clipboard!.reconcile();
       return;
@@ -307,7 +332,7 @@ class CrossLinkController extends ChangeNotifier {
       await _ensureClipboard();
       clipboardSyncEnabled = enabled;
       await prefs.setBool('clipboard_enabled_$deviceId', enabled);
-      if (enabled) {
+      if (enabled && !syncPaused) {
         await _activateClipboard(sendCurrent: true);
       } else {
         _clipboardRetry?.cancel();
@@ -315,6 +340,41 @@ class CrossLinkController extends ChangeNotifier {
         final owner = _clipboardOwner;
         if (owner != null) await bridge.watchClipboard(false, owner);
       }
+    });
+  }
+
+  Future<void> setSyncPaused(bool value) async {
+    await run(() async {
+      if (!signedIn || syncPaused == value) return;
+      syncPaused = value;
+      await prefs.setBool('sync_paused_$deviceId', value);
+      bridge.updateTray(syncPaused, devices);
+      if (value) {
+        final configuredClipboard = clipboardSyncEnabled;
+        await shutdown();
+        clipboardSyncEnabled = configuredClipboard;
+        if (android) await bridge.pauseBackground();
+        connection = '已暂停';
+      } else {
+        _nativeStateOwner = null;
+        _nativeRevision = -1;
+        if (android) await bridge.resumeBackground();
+        await connect();
+        await reload();
+      }
+      update();
+    });
+  }
+
+  Future<void> setStartup({
+    required bool enabled,
+    required bool minimized,
+  }) async {
+    await run(() async {
+      await bridge.setStartup(enabled, minimized);
+      final current = await bridge.startupSettings();
+      startWithWindows = current['enabled'] == true;
+      startMinimized = current['minimized'] == true;
     });
   }
 
@@ -401,6 +461,7 @@ class CrossLinkController extends ChangeNotifier {
   }
 
   void _loadCache() {
+    syncPaused = prefs.getBool('sync_paused_$deviceId') ?? false;
     deviceName = prefs.getString('device_name_$deviceId') ?? deviceName;
     cache.clear();
     final saved = prefs.getString('history_$deviceId');
@@ -427,6 +488,7 @@ class CrossLinkController extends ChangeNotifier {
 
   void _applyDeviceList(List<Map<String, dynamic>> list) {
     devices = list;
+    bridge.updateTray(syncPaused, devices);
     for (final device in list) {
       if (device['id'] == deviceId && device['name'] is String) {
         deviceName = device['name'];
@@ -497,7 +559,7 @@ class CrossLinkController extends ChangeNotifier {
   }
 
   Future<void> connect() async {
-    if (!signedIn || disposed) return;
+    if (!signedIn || disposed || syncPaused) return;
     _clipboard?.connectionLost();
     if (android) {
       try {
@@ -643,6 +705,7 @@ class CrossLinkController extends ChangeNotifier {
   Future<void> _handleBackground(Map<String, dynamic> value) async {
     if (disposed ||
         !signedIn ||
+        syncPaused ||
         value['owner'] != api!.tokens!['_native_owner']) {
       return;
     }
@@ -711,6 +774,7 @@ class CrossLinkController extends ChangeNotifier {
 
   bool _isActive(Api activeApi, int session) =>
       !disposed &&
+      !syncPaused &&
       signedIn &&
       api == activeApi &&
       session == _sessionGeneration;
@@ -766,6 +830,7 @@ class CrossLinkController extends ChangeNotifier {
           payload['content']?.toString() ??
               payload['name']?.toString() ??
               '收到文件',
+          messageId: m['id'] as String?,
         );
       } catch (_) {}
     }
@@ -787,7 +852,7 @@ class CrossLinkController extends ChangeNotifier {
 
   void _scheduleReconnect() {
     _clipboard?.connectionLost();
-    if (!signedIn || disposed || retry?.isActive == true) return;
+    if (!signedIn || disposed || syncPaused || retry?.isActive == true) return;
     retry = Timer(Duration(seconds: reconnectSeconds(attempts++)), () {
       unawaited(connect());
     });
@@ -795,6 +860,7 @@ class CrossLinkController extends ChangeNotifier {
 
   Future<void> sendMessage(String kind, String content, {String? title}) async {
     if (!signedIn) throw const FormatException('请先登录');
+    if (syncPaused) throw const FormatException('同步已暂停，请先恢复');
     if (kind == 'clipboard' ? content.isEmpty : content.trim().isEmpty) {
       throw const FormatException('请输入要发送的内容');
     }
@@ -1037,6 +1103,8 @@ class CrossLinkController extends ChangeNotifier {
     deviceId = '';
     target = null;
     connection = '未连接';
+    syncPaused = false;
+    bridge.updateTray(false, const []);
     update();
   }
 

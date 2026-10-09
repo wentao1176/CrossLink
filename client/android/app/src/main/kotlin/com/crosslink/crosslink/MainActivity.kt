@@ -57,6 +57,10 @@ class MainActivity : FlutterActivity() {
                             require(endpoint.startsWith("https://"))
                             val existing = SyncService.client
                             val persisted = SessionStore.read(this)
+                            if (persisted?.optBoolean("paused",false) == true) {
+                                val current=JSONObject(persisted.toString()).put("connection",JSONObject().put("state","paused").put("revision",0))
+                                runOnUiThread { result.success(current.toString()) };return@execute
+                            }
                             if (existing != null && persisted?.optString("endpoint") == endpoint &&
                                 existing.snapshot().optString("device_id") == JSONObject(tokens).optString("device_id")) {
                                 val current = JSONObject(persisted!!.toString()).put("tokens", existing.snapshot()).put("connection", existing.connectionSnapshot()).toString()
@@ -64,8 +68,9 @@ class MainActivity : FlutterActivity() {
                                 return@execute
                             }
                             val owner = UUID.randomUUID().toString()
-                            val owned = JSONObject(tokens).put("_native_owner", owner)
-                            SessionStore.save(this, JSONObject().put("endpoint", endpoint).put("tokens", owned).put("owner", owner))
+                            val next=BackgroundSession.resume(JSONObject().put("endpoint",endpoint).put("tokens",JSONObject(tokens)),owner)
+                            val owned=next.getJSONObject("tokens")
+                            SessionStore.save(this,next)
                             runOnUiThread {
                                 try {
                                     ContextCompat.startForegroundService(this, Intent(this, SyncService::class.java).putExtra("replace", true))
@@ -90,6 +95,29 @@ class MainActivity : FlutterActivity() {
                         catch (_: Exception) { runOnUiThread { result.error("BACKGROUND_REFRESH", "Platform unavailable", null) } }
                     }
                 }
+                "backgroundPause" -> {
+                    val stopping=SyncService.client
+                    stopping?.stop()
+                    stopService(Intent(this,SyncService::class.java))
+                    worker.execute {
+                        try {
+                            stopping?.awaitStopped()
+                            val session=SessionStore.read(this)
+                            if(session!=null) SessionStore.saveOwned(this,BackgroundSession.pause(session),session.getString("owner"))
+                            runOnUiThread { result.success(null) }
+                        } catch(_:Exception) { runOnUiThread { result.error("SESSION_STORAGE","Unable to pause session",null) } }
+                    }
+                }
+                "backgroundResume" -> {
+                    worker.execute {
+                        try {
+                            val session=SessionStore.read(this)
+                            if(session!=null) SessionStore.saveOwned(this,session.put("paused",false),session.getString("owner"))
+                            runOnUiThread { result.success(null) }
+                        } catch(_:Exception) { runOnUiThread { result.error("SESSION_STORAGE","Unable to resume session",null) } }
+                    }
+                }
+                "notificationsEnabled" -> result.success(Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
                 "backgroundStop" -> {
                     // Stop the refresh owner before clearing durable credentials.
                     val stopping = SyncService.client

@@ -1,5 +1,6 @@
 #include "clipboard_bridge.h"
 #include "clipboard_helpers.h"
+#include "startup_helpers.h"
 #include <flutter/standard_method_codec.h>
 #include <cstdint>
 namespace {
@@ -14,6 +15,19 @@ ClipboardBridge::ClipboardBridge(flutter::BinaryMessenger* messenger,HWND window
  channel_=std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(messenger,"crosslink/native",&flutter::StandardMethodCodec::GetInstance());
  channel_->SetMethodCallHandler([this](const flutter::MethodCall<flutter::EncodableValue>& call,std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result){
   const auto* args=call.arguments();const std::string tag=StringArg(args,"owner");
+  if(call.method_name()=="startupRead"){
+   const auto settings=crosslink::ReadStartup();
+   result->Success(flutter::EncodableValue(flutter::EncodableMap{
+    {flutter::EncodableValue("enabled"),flutter::EncodableValue(settings.enabled)},
+    {flutter::EncodableValue("minimized"),flutter::EncodableValue(settings.minimized)}}));return;
+  }
+  if(call.method_name()=="startupWrite"){
+   const auto* rawEnabled=Arg(args,"enabled");const auto* rawMinimized=Arg(args,"minimized");
+   const auto* enabled=rawEnabled?std::get_if<bool>(rawEnabled):nullptr;const auto* minimized=rawMinimized?std::get_if<bool>(rawMinimized):nullptr;
+   if(!enabled||!minimized||!crosslink::WriteStartup(*enabled,*minimized)){result->Error("STARTUP_FAILED","Unable to update current-user startup");return;}
+   result->Success();return;
+  }
+  if(call.method_name()=="showWindow"){ShowWindow(window_,SW_SHOW);SetForegroundWindow(window_);result->Success();return;}
   if(call.method_name()=="clipboardWatch"){
    const auto* raw=Arg(args,"enabled");const auto* enabled=raw?std::get_if<bool>(raw):nullptr;
    if(!enabled||tag.empty()){result->Error("INVALID_CLIPBOARD_ARGUMENT","Invalid clipboard session");return;}
@@ -59,5 +73,6 @@ void ClipboardBridge::Changed(){
   {flutter::EncodableValue("reason"),flutter::EncodableValue(value.reason)}}));
 }
 bool ClipboardBridge::HandleMessage(UINT message,WPARAM wparam){
+ if(message==crosslink::ActivationMessage()){ShowWindow(window_,SW_RESTORE);SetForegroundWindow(window_);return true;}
  if(message==WM_CLIPBOARDUPDATE||(message==WM_TIMER&&wparam==kRetryTimer)){Changed();return true;}return false;
 }
