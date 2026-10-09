@@ -1,3 +1,9 @@
+# Current verification: CrossLink0.3.0, 2026-10-09
+
+Current source/build/installer/signature/platform/backup evidence and explicit remaining gates are in [0.3.0 acceptance](acceptance/0.3.0.md). Current results: backend55, shared Dart57, native JVM11; Windows QA/production setup+ZIP and signed ARM64 release APKs built from the same5009205be86b566283fdd9ce659c5412f4ab5ff4. Physical phone, public activation, native version upgrade and72h usage remain pending. Known Minor notification-permission label issue is recorded there.
+
+The following sections are historical evidence for0.1/0.2 and stabilization, not the current release status.
+
 # Verification record — 2026-10-04
 
 All development, builds, caches and execution took place via SSH on aliyun in `/home/CrossLink`. No local source/build artifact was created or downloaded.

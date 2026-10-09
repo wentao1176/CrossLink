@@ -1,58 +1,35 @@
 # CrossLink
 
-跨设备文件、文字、剪贴板、链接和通知同步。根据用户开发设计文档实现 Flutter Windows/Android 客户端、浏览器预览，以及 FastAPI/PostgreSQL 中转平台。
+Windows与Android的同账号文件、文字、链接和剪贴板中转同步App。两端只输入用户名、密码登录，平台地址已内置，登录后自动发现同账号设备，无须配对或配置服务器。注册额外填写邮箱。
 
-全部开发、构建、缓存和产物在阿里云 `/home/CrossLink`，通过 SSH 操作。
+## 0.3.0 安装包
 
-## App 的使用方式
+| 平台 | 正式产物 |
+|---|---|
+| Windows x64 | `artifacts/0.3.0/production/CrossLink-0.3.0-windows-x64-setup.exe`，当前用户双击安装 |
+| Windows便携包 | 同目录`CrossLink-0.3.0-windows-x64.zip`，完整解压后运行`crosslink.exe` |
+| Android ARM64 | 同目录`CrossLink-0.3.0-android-arm64-release.apk`，专用发布签名，Android7.0及以上 |
 
-Windows 和 Android 登录页仅填写用户名、密码；设备名称自动读取，平台地址在构建时内置。登录后自动连接、显示同账号设备。默认发送给该账号其他设备，也可选定目标。服务器在后台中转，用户无需配对、输入地址或选择服务器。注册另需邮箱。
+版本/源码/签名/哈希见`artifacts/0.3.0/manifest.json`和`SHA256SUMS`。QA包在相邻`qa`目录，应用名称、身份和内置验收通道与正式版分开。旧0.2调试签名不能直接升级到正式签名，先保留已下载文件。完整安装说明、验证记录和待验收项见[0.3.0交付记录](docs/acceptance/0.3.0.md)。
 
-Android 使用 remoteMessaging 前台服务维持后台连接，关闭界面不等于退出登录。凭据通过 Android Keystore 加密保存在应用私有目录；后台统一负责刷新 Token、补收离线消息、保存后 ACK 和通知。退出登录会停止服务并清除凭据。Android 系统强行停止、厂商省电限制、用户拒绝通知的实际表现仍需实机验证。剪贴板目前手动发送/复制，文件最大 100 MiB。
+**公网入口仍未开放。** 目前正式包可安装，外部网络登录/互传要在后续获授权开启平台入口后使用；手机实测由用户明确延后。当前用户Windows安装、启动、单实例、重复安装和卸载已检查；Android真实手机、两端实际粘贴/文件打开、后台恢复和72小时使用尚未验收。
 
-Windows 源码包含托盘、关闭窗口驻留、通知、文件选择和剪贴板。Linux ECS 无法编译 Flutter Windows exe；`artifacts/CrossLink-0.2.0-windows-build-kit.zip` 提供源码、内置平台配置和一键构建脚本。需要 Windows、Git、Visual Studio C++ 工具链，解压后执行：
+## 使用流程与复制粘贴
 
-```powershell
-powershell -ExecutionPolicy Bypass -File deploy/build-windows.ps1
-```
+登录同一账号后，设备自动列出，可向全部其他设备或选定设备发送文字、链接和文件。没有另一设备时界面会提示在另一端登录同账号。送达、已读、文件已保存是独立状态；离线后恢复会补收，重试保留操作身份。
 
-脚本将工具放在包内 `.tools`，校验官方 Flutter 3.47.6 的固定 Git 提交，分析、测试并构建完整 Windows ZIP。它不会提权或安装 C++ 编译器。该 ZIP 是构建包，不能当作现成 exe 安装。
+在设置中开启“复制粘贴同步”，文字/链接将经平台同步到目标系统剪贴板。Windows可驻留托盘同步；Android从其他App复制后需打开CrossLink读取，远端写入也在CrossLink获得焦点后进行，再切到目标App粘贴。这与[Android10起的剪贴板读取限制](https://developer.android.com/about/versions/10/privacy/changes#clipboard-data)一致。图片/文件剪贴板格式尚未实现。
 
-Android 测试包：`artifacts/CrossLink-0.2.0-arm64-debug.apk`，开发签名、ARM64、minSdk 24。构建包和 APK 的校验值见 `artifacts/SHA256SUMS`。
+暂停同步保留登录状态，恢复后补收。Windows自启动需自行开启，安装默认关闭。Android后台接收服务已实现，强行停止、锁屏/省电和权限变化的实际表现等待手机验收。当前普通文件上限100MiB、保存7天；原生下载流式验证SHA256，按系统选择位置保存，支持取消与逐文件结果，尚无分块续传。
 
-## 平台连接状态
+## 开发与运维
 
-原生 App 已内置 HTTPS 平台地址，并携带平台公开 CA；证书的 IP/主机名校验保持启用，私钥仅在服务器。无需购买或填写域名。
+权威源码、部署、备份和归档在阿里云`/home/CrossLink`，通过SSH操控。用户已追加授权本机Windows构建；工具、源码导出、缓存和本机交付位于`D:/aliyun/CrossLink/.build`，最终包已回传服务器。SDK和依赖锁定；Windows须使用独立`main_windows.dart`入口，Android/web使用`main.dart`。
 
-API、PostgreSQL、TLS 网关服务已经部署；TLS 网关当前仅监听 `127.0.0.1:8443`，代理到 API 的 `127.0.0.1:8765`。数据库仅监听 `127.0.0.1:55432`。按用户此前要求，未开放安全组、防火墙或公网监听。因此原生 App 的内置公网连接在后续开放前尚不能从外部使用；服务功能可通过 SSH 隧道验证。公开监听样例已准备，尚未启用。
+- [Windows构建](docs/WINDOWS_BUILD.md)、[Android发布与签名](docs/ANDROID_RELEASE.md)
+- [平台运维、备份恢复与回退](docs/OPERATIONS.md)、[原生验收](docs/NATIVE_ACCEPTANCE.md)
+- [当前验证与历史记录](docs/VERIFICATION.md)、[后续交付路线](docs/superpowers/plans/2026-10-09-crosslink-delivery-roadmap.md)
 
-浏览器预览通过 SSH 隧道：
+API与数据库只绑定loopback，单API worker；公开监听样例已准备，须另行取得用户授权。储存守护保留至少2GiB系统余量；数据库、文件与私密材料一致备份及隔离恢复已验证，同盘备份仍需要以后补充异机灾备。
 
-```powershell
-ssh -F NUL -N -L 127.0.0.1:18765:127.0.0.1:8765 root@47.116.203.177
-```
-
-打开 `http://127.0.0.1:18765`；浏览器也只需账号密码，自动使用页面所在平台。
-
-## 运维和验证
-
-```bash
-ssh -o ClearAllForwardings=yes aliyun
-cd /home/CrossLink
-systemctl status crosslink-api crosslink-postgres crosslink-gateway
-curl --cacert client/assets/platform_ca.pem https://127.0.0.1:8443/health
-source deploy/flutter-env.sh
-cd client
-flutter analyze
-flutter test
-cd ..
-python3 deploy/test-android.py
-cd server
-../.venv/bin/python -m pytest -q
-```
-
-`deploy/smoke_live.py` 验证真实 PostgreSQL、两设备发现/推送、文件哈希、权限、撤销和重启持久化，并清理测试账户。API 保持单 worker。证书续期定时器由平台私有 CA 续签叶证书，公开 CA 无需随每次续期变更。
-
-`bash deploy/build-clients.sh` 重新构建 Web 和 Android。小内存 ECS 的 JVM 构建单独限制内存、使用现有 swap。生产数据在 `data`，私钥、平台构建配置、Token 和日志不进入源码包。Docker Compose 是未启动的替代模板；当前使用专用 systemd 服务。
-
-本版保留设计文档中的后续功能：分片续传、OSS、自动剪贴板、P2P、E2EE、Redis 多 worker，以及邮箱验证/密码找回。Windows 二进制、实机后台稳定性和正式签名仍需相应环境验收。具体测试证据见 `docs/VERIFICATION.md`。
+后续增强包括分块/续传与2GB文件、更多剪贴板格式、保留期偏好、账号恢复/自动升级、推送、OSS、Redis、P2P/E2EE。它们不列入当前已完成的安装包验收。用户原始设计保留在`docs/DEVELOPMENT_DESIGN.md`。
