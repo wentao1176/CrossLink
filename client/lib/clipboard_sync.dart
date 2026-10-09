@@ -9,10 +9,12 @@ class LocalClipboard {
     this.text,
     required this.sequence,
     this.available = true,
+    this.reason,
   });
   final String? text;
   final int sequence;
   final bool available;
+  final String? reason;
 }
 
 class ClipboardSync {
@@ -44,7 +46,7 @@ class ClipboardSync {
   final Future<Map<String, dynamic>> Function(String text, String operationId)
   send;
   final Future<LocalClipboard> Function() read;
-  final Future<bool> Function(String text) write;
+  final Future<bool> Function(String text, int expectedSequence) write;
   final Future<Map<String, dynamic>?> Function() fetchLatest;
   final Future<void> Function(Map<String, dynamic> state) persist;
   final int Function() nowSeconds;
@@ -106,6 +108,7 @@ class ClipboardSync {
       }
     }
     if (enabled && epoch == _epoch) await reconcile();
+    if (enabled && status == '连接剪贴板') _status('已启用，等待复制');
   }
 
   void pause() {
@@ -124,6 +127,24 @@ class ClipboardSync {
     ++_epoch;
     _snapshotReady = false;
     _status('等待连接恢复');
+  }
+
+  Future<void> localUnavailable(String reason, int sequence) async {
+    if (!enabled) return;
+    if (reason == 'too_large' || reason == 'unsupported') {
+      _blockedLocal = true;
+      _pending = null;
+      _lastSequence = sequence;
+      ++_localGeneration;
+      await _save();
+    }
+    _status(
+      reason == 'too_large'
+          ? '剪贴板文字超过 100 KiB，保留在本机'
+          : reason == 'unsupported'
+          ? '图片或文件剪贴板暂保留在本机，可用文件发送'
+          : '系统剪贴板暂不可用，稍后重试',
+    );
   }
 
   Future<void> onLocalChange(String text, int sequence) async {
@@ -186,7 +207,7 @@ class ClipboardSync {
         if (version > _seenRevision) _seenRevision = version.toInt();
         if (_pending?['id'] == pending['id']) _pending = null;
         await _save();
-        _status('已同步');
+        _status('已发送，等待其他设备接收');
       } catch (_) {
         if (enabled && epoch == _epoch) _status('等待网络恢复后同步');
         return;
@@ -254,7 +275,7 @@ class ClipboardSync {
       if (!enabled || epoch != _epoch) return;
       if (generation != _localGeneration) continue;
       if (!local.available) {
-        _status('收到新内容，打开 CrossLink 后同步');
+        _status(local.reason ?? '收到新内容，打开 CrossLink 后同步');
         return;
       }
       if (local.text == null &&
@@ -274,7 +295,7 @@ class ClipboardSync {
       _writingHash = _hash(text);
       bool written;
       try {
-        written = await write(text);
+        written = await write(text, local.sequence);
       } catch (_) {
         written = false;
       } finally {

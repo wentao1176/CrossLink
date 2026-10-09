@@ -171,4 +171,19 @@ class SyncClientTest {
    c.stop();assertEquals("stopped",c.connectionSnapshot().getString("state"))
   }finally{c.stop();server.shutdown()}
  }
+
+ @Test fun clipboardPolicySuppressesOwnDuplicatesButAllowsUserRecopy() {
+  val policy=ClipboardPolicy()
+  val initial=policy.observe("initial",1,null)
+  policy.markWritten("owner-write",2)
+  val own=policy.observe("remote",2,"owner-write")
+  val duplicate=policy.observe("remote",2,"owner-write")
+  assertTrue(own.ownWrite);assertTrue(duplicate.ownWrite);assertEquals(own.sequence,duplicate.sequence)
+  val user=policy.observe("remote",3,null)
+  assertFalse(user.ownWrite);assertTrue(user.sequence>own.sequence);assertTrue(own.sequence>initial.sequence)
+ }
+ @Test fun clipboardPolicyResetsOldOwnerMarkers() {
+  val policy=ClipboardPolicy();policy.markWritten("old",7);assertTrue(policy.observe("text",7,"old").ownWrite)
+  policy.reset();assertFalse(policy.observe("text",7,"old").ownWrite)
+ }
 }

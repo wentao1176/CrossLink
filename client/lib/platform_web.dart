@@ -1,5 +1,7 @@
 import 'package:flutter/services.dart';
 
+import 'clipboard_sync.dart';
+
 class PlatformBridge {
   static const channel = MethodChannel('crosslink/native');
   Future<void> Function(Map<String, dynamic>)? onShare;
@@ -7,6 +9,14 @@ class PlatformBridge {
   Future<void> Function()? onClipboard;
   Future<void> Function()? onFiles;
   Future<void> Function()? onExit;
+  Future<void> Function(Map<String, dynamic>)? onClipboardChange;
+  Future<void> Function(Map<String, dynamic>)? onClipboardFocus;
+  bool get clipboardSupported => false;
+  Future<bool> watchClipboard(bool enabled, String owner) async => false;
+  Future<LocalClipboard> readClipboard(String owner) async =>
+      const LocalClipboard(sequence: 0, available: false);
+  Future<bool> writeClipboard(String owner, String text, int sequence) async =>
+      false;
   Future<String> deviceName() async => '浏览器';
   Future<Map<String, dynamic>?> backgroundSnapshot() async => null;
   Future<Map<String, dynamic>> startBackground(

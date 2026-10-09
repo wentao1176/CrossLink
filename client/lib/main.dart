@@ -781,7 +781,21 @@ class _HomeScreenState extends State<HomeScreen> {
         const SizedBox(height: 20),
         Text('设备：${c.deviceName}'),
         const SizedBox(height: 10),
-        const Text('剪贴板：手动发送 · 收到后点击复制'),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('复制粘贴同步'),
+          subtitle: Text(
+            c.clipboardSupported ? c.clipboardStatus : '浏览器预览支持手动发送与复制',
+          ),
+          value: c.clipboardSyncEnabled,
+          onChanged: c.busy || !c.clipboardSupported
+              ? null
+              : c.setClipboardSyncEnabled,
+        ),
+        if (c.android)
+          const Text('手机在其他 App 复制后，打开 CrossLink 即可同步。收到内容后可在其他 App 直接粘贴。')
+        else if (c.windows)
+          const Text('开启后，复制文字或链接会同步到同账号设备；电脑驻留托盘时也可同步。'),
         const SizedBox(height: 10),
         const Text('文件保留：7 天 · 最大 100 MB'),
         const SizedBox(height: 10),

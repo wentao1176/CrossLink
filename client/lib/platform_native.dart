@@ -3,6 +3,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+
+import 'clipboard_sync.dart';
+
 import 'package:flutter/services.dart';
 import 'package:local_notifier/local_notifier.dart';
 import 'package:window_manager/window_manager.dart';
@@ -17,6 +20,9 @@ class PlatformBridge with WindowListener {
   Future<void> Function()? onClipboard;
   Future<void> Function()? onFiles;
   Future<void> Function()? onExit;
+  Future<void> Function(Map<String, dynamic>)? onClipboardChange;
+  Future<void> Function(Map<String, dynamic>)? onClipboardFocus;
+  bool get clipboardSupported => windows || android;
   bool get windows =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
   bool get android =>
@@ -34,6 +40,28 @@ class PlatformBridge with WindowListener {
   }
 
   Future<void> initialize() async {
+    if (clipboardSupported) {
+      channel.setMethodCallHandler((call) async {
+        if (call.method == 'backgroundEvent' && call.arguments is String) {
+          await onBackground?.call(
+            Map<String, dynamic>.from(jsonDecode(call.arguments)),
+          );
+        }
+        if (call.method == 'clipboardChanged' && call.arguments is Map) {
+          await onClipboardChange?.call(
+            Map<String, dynamic>.from(call.arguments),
+          );
+        }
+        if (call.method == 'clipboardFocus' && call.arguments is Map) {
+          await onClipboardFocus?.call(
+            Map<String, dynamic>.from(call.arguments),
+          );
+        }
+        if (call.method == 'share' && call.arguments is Map) {
+          await onShare?.call(Map<String, dynamic>.from(call.arguments));
+        }
+      });
+    }
     if (windows) {
       await windowManager.ensureInitialized();
       await windowManager.setTitle('CrossLink');
@@ -82,16 +110,6 @@ class PlatformBridge with WindowListener {
       }
     }
     if (android) {
-      channel.setMethodCallHandler((call) async {
-        if (call.method == 'backgroundEvent' && call.arguments is String) {
-          await onBackground?.call(
-            Map<String, dynamic>.from(jsonDecode(call.arguments)),
-          );
-        }
-        if (call.method == 'share' && call.arguments is Map) {
-          await onShare?.call(Map<String, dynamic>.from(call.arguments));
-        }
-      });
       await channel.invokeMethod<void>('requestNotifications');
       final initial = await channel.invokeMethod<dynamic>('getInitialShare');
       if (initial is Map) {
@@ -99,6 +117,43 @@ class PlatformBridge with WindowListener {
       }
     }
   }
+
+  Future<bool> watchClipboard(bool enabled, String owner) async =>
+      await channel.invokeMethod<bool>('clipboardWatch', {
+        'enabled': enabled,
+        'owner': owner,
+      }) ??
+      false;
+  Future<LocalClipboard> readClipboard(String owner) async {
+    final value = await channel.invokeMapMethod<String, dynamic>(
+      'clipboardRead',
+      {'owner': owner},
+    );
+    const notices = {
+      'focus': '收到新内容，打开 CrossLink 后同步',
+      'unsupported': '图片或文件剪贴板暂保留在本机',
+      'too_large': '剪贴板文字超过 100 KiB，保留在本机',
+      'busy': '剪贴板暂被其他应用占用，稍后重试',
+    };
+    return LocalClipboard(
+      text: value?['text'] as String?,
+      sequence: (value?['sequence'] as num?)?.toInt() ?? 0,
+      available: value?['available'] == true,
+      reason: notices[value?['reason']],
+    );
+  }
+
+  Future<bool> writeClipboard(
+    String owner,
+    String text,
+    int expectedSequence,
+  ) async =>
+      await channel.invokeMethod<bool>('clipboardWrite', {
+        'owner': owner,
+        'text': text,
+        'expected_sequence': expectedSequence,
+      }) ??
+      false;
 
   Future<Map<String, dynamic>?> backgroundSnapshot() async {
     final value = await channel.invokeMethod<String>('backgroundSnapshot');

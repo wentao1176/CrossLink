@@ -13,6 +13,7 @@ import 'package:uuid/uuid.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'api.dart';
+import 'clipboard_sync.dart';
 import 'protocol.dart';
 import 'platform_bridge.dart';
 import 'native_stub.dart' if (dart.library.io) 'native_io.dart' as native;
@@ -48,6 +49,12 @@ class CrossLinkController extends ChangeNotifier {
   final Map<String, String> _earlyReceipts = {};
   int _nativeRevision = -1;
   String? _nativeStateOwner;
+  ClipboardSync? _clipboard;
+  String? _clipboardOwner;
+  Timer? _clipboardRetry;
+  bool clipboardSyncEnabled = false;
+  String get clipboardStatus => _clipboard?.status ?? '未开启';
+  bool get clipboardSupported => bridge.clipboardSupported;
   double? progress;
   CancelToken? cancelToken;
   bool get signedIn => api?.tokens != null;
@@ -81,6 +88,31 @@ class CrossLinkController extends ChangeNotifier {
         shared = value;
         if (value['text'] != null) text.text = value['text'];
         update();
+      };
+      bridge.onClipboardChange = (value) async {
+        final clip = _clipboard;
+        if (clip == null ||
+            !clipboardSyncEnabled ||
+            !signedIn ||
+            value['owner'] != _clipboardOwner) {
+          return;
+        }
+        final sequence = (value['sequence'] as num?)?.toInt() ?? 0;
+        if (value['available'] == true) {
+          await clip.onLocalChange(value['text'] as String? ?? '', sequence);
+        } else {
+          await clip.localUnavailable(
+            value['reason'] as String? ?? 'busy',
+            sequence,
+          );
+        }
+      };
+      bridge.onClipboardFocus = (value) async {
+        if (value['owner'] == _clipboardOwner &&
+            value['focused'] == true &&
+            clipboardSyncEnabled) {
+          await _clipboard?.reconcile();
+        }
       };
       bridge.onClipboard = sendClipboard;
       bridge.onFiles = pickFiles;
@@ -166,6 +198,137 @@ class CrossLinkController extends ChangeNotifier {
         update();
       },
     );
+  }
+
+  Future<void> _ensureClipboard() async {
+    if (!clipboardSupported || !signedIn) return;
+    if (_clipboard != null) {
+      if (clipboardSyncEnabled) await _clipboard!.reconcile();
+      return;
+    }
+    final activeApi = api!;
+    final session = _sessionGeneration;
+    final id = deviceId;
+    final owner = const Uuid().v4();
+    Map<String, dynamic>? restored;
+    try {
+      final saved = prefs.getString('clipboard_state_$id');
+      if (saved != null) {
+        restored = Map<String, dynamic>.from(jsonDecode(saved));
+      }
+    } catch (_) {}
+    late ClipboardSync clip;
+    clip = ClipboardSync(
+      deviceId: id,
+      send: (content, key) async {
+        if (!_isActive(activeApi, session)) {
+          throw StateError('Clipboard session stopped');
+        }
+        final response = await activeApi.dio.post<dynamic>(
+          '/messages',
+          data: {
+            'type': 'clipboard',
+            'target_device_id': null,
+            'client_message_id': key,
+            'payload': {'content': content},
+          },
+        );
+        if (!_isActive(activeApi, session)) {
+          throw StateError('Clipboard session stopped');
+        }
+        final message = Map<String, dynamic>.from(response.data);
+        _putMessage(message);
+        await _saveCache();
+        update();
+        return message;
+      },
+      read: () async => _isActive(activeApi, session)
+          ? await bridge.readClipboard(owner)
+          : const LocalClipboard(sequence: 0, available: false),
+      write: (text, sequence) async => _isActive(activeApi, session)
+          ? await bridge.writeClipboard(owner, text, sequence)
+          : false,
+      fetchLatest: () async {
+        if (!_isActive(activeApi, session)) return null;
+        final response = await activeApi.dio.get<dynamic>('/clipboard/latest');
+        if (!_isActive(activeApi, session)) return null;
+        return response.data == null
+            ? null
+            : Map<String, dynamic>.from(response.data);
+      },
+      persist: (state) async {
+        await prefs.setString('clipboard_state_$id', jsonEncode(state));
+      },
+      initialState: restored,
+      onChanged: () {
+        if (_isActive(activeApi, session) && identical(_clipboard, clip)) {
+          update();
+        }
+      },
+    );
+    _clipboard = clip;
+    _clipboardOwner = owner;
+    clipboardSyncEnabled = prefs.getBool('clipboard_enabled_$id') ?? false;
+    if (clipboardSyncEnabled) await _activateClipboard(sendCurrent: false);
+  }
+
+  Future<void> _activateClipboard({required bool sendCurrent}) async {
+    final clip = _clipboard, owner = _clipboardOwner;
+    if (clip == null || owner == null || !signedIn) return;
+    if (!await bridge.watchClipboard(true, owner)) {
+      throw const FormatException('系统剪贴板同步暂不可用');
+    }
+    if (!signedIn ||
+        !identical(_clipboard, clip) ||
+        _clipboardOwner != owner ||
+        !clipboardSyncEnabled) {
+      return;
+    }
+    await clip.enable(sendCurrent: sendCurrent);
+    if (!signedIn ||
+        !identical(_clipboard, clip) ||
+        _clipboardOwner != owner ||
+        !clipboardSyncEnabled) {
+      return;
+    }
+    _clipboardRetry?.cancel();
+    _clipboardRetry = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (clipboardSyncEnabled && signedIn && identical(_clipboard, clip)) {
+        unawaited(clip.reconcile());
+      }
+    });
+    update();
+  }
+
+  Future<void> setClipboardSyncEnabled(bool enabled) async {
+    await run(() async {
+      if (!signedIn || !clipboardSupported) return;
+      await _ensureClipboard();
+      clipboardSyncEnabled = enabled;
+      await prefs.setBool('clipboard_enabled_$deviceId', enabled);
+      if (enabled) {
+        await _activateClipboard(sendCurrent: true);
+      } else {
+        _clipboardRetry?.cancel();
+        _clipboard?.pause();
+        final owner = _clipboardOwner;
+        if (owner != null) await bridge.watchClipboard(false, owner);
+      }
+    });
+  }
+
+  Future<void> _stopClipboard() async {
+    final owner = _clipboardOwner;
+    _clipboardRetry?.cancel();
+    _clipboard?.dispose();
+    _clipboard = null;
+    _clipboardOwner = null;
+    clipboardSyncEnabled = false;
+    if (owner != null) {
+      try {
+        await bridge.watchClipboard(false, owner);
+      } catch (_) {}
+    }
   }
 
   Future<void> login(String account, String password, {String? email}) async {
@@ -333,6 +496,7 @@ class CrossLinkController extends ChangeNotifier {
 
   Future<void> connect() async {
     if (!signedIn || disposed) return;
+    _clipboard?.connectionLost();
     if (android) {
       try {
         connection = '连接中';
@@ -357,6 +521,7 @@ class CrossLinkController extends ChangeNotifier {
           return;
         }
         if (current != null) _applyNativeConnection(current);
+        await _ensureClipboard();
         await pullPending();
       } catch (e) {
         error = userError(e);
@@ -428,6 +593,7 @@ class CrossLinkController extends ChangeNotifier {
           _scheduleReconnect();
         }
       });
+      await _ensureClipboard();
       await pullPending();
       await reload();
       update();
@@ -461,10 +627,14 @@ class CrossLinkController extends ChangeNotifier {
     }
     if (revision < _nativeRevision) return;
     _nativeRevision = revision.toInt();
+    final changed = connection != label;
     connection = label;
     if (raw['state'] == 'connected') {
       attempts = 0;
       retry?.cancel();
+      if (changed && clipboardSyncEnabled) unawaited(_clipboard?.reconcile());
+    } else if (changed) {
+      _clipboard?.connectionLost();
     }
   }
 
@@ -604,6 +774,8 @@ class CrossLinkController extends ChangeNotifier {
       transfers = list;
     }
     if (m['type'] == 'clipboard') {
+      if (clipboardSyncEnabled) await _clipboard?.onRemoteClipboard(m);
+      if (!_isActive(activeApi, session)) return;
       final list = await activeApi.list('/clipboard');
       if (!_isActive(activeApi, session)) return;
       clips = list;
@@ -612,6 +784,7 @@ class CrossLinkController extends ChangeNotifier {
   }
 
   void _scheduleReconnect() {
+    _clipboard?.connectionLost();
     if (!signedIn || disposed || retry?.isActive == true) return;
     retry = Timer(Duration(seconds: reconnectSeconds(attempts++)), () {
       unawaited(connect());
@@ -843,6 +1016,7 @@ class CrossLinkController extends ChangeNotifier {
   }
 
   Future<void> shutdown() async {
+    await _stopClipboard();
     ++_generation;
     retry?.cancel();
     heartbeat?.cancel();

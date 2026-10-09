@@ -20,6 +20,7 @@ import java.util.UUID
 import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
+    private var clipboardBridge: NativeClipboardBridge? = null
     private var eventListener: ((JSONObject) -> Unit)? = null
     private var channel: MethodChannel? = null
     private var pendingShare: Map<String, Any>? = null
@@ -29,10 +30,14 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
         channel = MethodChannel(engine.dartExecutor.binaryMessenger, "crosslink/native")
+        clipboardBridge = NativeClipboardBridge(this) { method, value -> channel?.invokeMethod(method, value) }
         eventListener = { value -> runOnUiThread { channel?.invokeMethod("backgroundEvent", value.toString()) } }
         SyncService.listener = eventListener
         channel!!.setMethodCallHandler { call, result ->
             when (call.method) {
+                "clipboardWatch" -> result.success(clipboardBridge?.watch(call.argument<Boolean>("enabled") ?: false, call.argument<String>("owner") ?: ""))
+                "clipboardRead" -> result.success(clipboardBridge?.snapshot(call.argument<String>("owner") ?: ""))
+                "clipboardWrite" -> result.success(clipboardBridge?.write(call.argument<String>("owner") ?: "", call.argument<String>("text") ?: "", call.argument<Number>("expected_sequence")?.toLong() ?: -1) ?: false)
                 "backgroundSnapshot" -> {
                     worker.execute {
                         try {
@@ -134,7 +139,9 @@ class MainActivity : FlutterActivity() {
         }
         receiveShare(intent)
     }
+    override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus); clipboardBridge?.focus(hasFocus) }
     override fun onDestroy() {
+        clipboardBridge?.dispose(); clipboardBridge = null
         if (SyncService.listener === eventListener) SyncService.listener = null
         channel?.setMethodCallHandler(null)
         channel = null

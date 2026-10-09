@@ -45,8 +45,8 @@ class ClipboardFixture {
       read: () async => customRead != null
           ? await customRead!()
           : LocalClipboard(text: text, sequence: sequence, available: canRead),
-      write: (value) async {
-        if (!canWrite) return false;
+      write: (value, expectedSequence) async {
+        if (!canWrite || expectedSequence != sequence) return false;
         text = value;
         sequence++;
         writes.add(value);

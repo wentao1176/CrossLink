@@ -22,9 +22,11 @@ class ControllerHarness {
     '_native_owner': 'owner',
   };
   String? clipboard;
+  final List<Map<String, dynamic>> requests = [];
   static Future<ControllerHarness> create(
     Future<void> Function(HttpRequest) respond, {
     Map<String, Object> preferences = const {},
+    Future<dynamic> Function(MethodCall)? nativeResponder,
   }) async {
     final h = ControllerHarness();
     HttpOverrides.global = null;
@@ -33,6 +35,9 @@ class ControllerHarness {
     h.messenger.setMockMethodCallHandler(
       const MethodChannel('crosslink/native'),
       (call) async {
+        if (call.method.startsWith('clipboard') && nativeResponder != null) {
+          return nativeResponder(call);
+        }
         if (call.method == 'deviceName') return 'Phone';
         if (call.method == 'backgroundStart') {
           return jsonEncode({
@@ -57,7 +62,12 @@ class ControllerHarness {
     });
     h.server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     h.listener = h.server.listen((request) async {
-      await request.drain<void>();
+      final body = await utf8.decoder.bind(request).join();
+      h.requests.add({
+        'path': request.uri.path,
+        'method': request.method,
+        'body': body.isEmpty ? null : jsonDecode(body),
+      });
       request.response.headers.contentType = ContentType.json;
       await respond(request);
       await request.response.close();
