@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'controller.dart';
+import 'protocol.dart';
 
 final controllerProvider = Provider<CrossLinkController>((ref) {
   final controller = CrossLinkController();
@@ -208,7 +209,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 18),
                 const Text(
-                  '剪贴板默认手动发送。文件暂存 7 天，单文件最大 100 MB。',
+                  '在设置中启用复制粘贴同步。文件暂存 7 天，单文件最大 100 MB。',
                   style: TextStyle(color: Colors.blueGrey, fontSize: 12),
                 ),
               ],
@@ -445,6 +446,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
+              key: ValueKey(c.target),
               initialValue: c.target ?? '',
               items: [
                 const DropdownMenuItem(value: '', child: Text('全部其他设备')),
@@ -466,6 +468,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       c.update();
                     },
             ),
+            if (!c.hasPeers) ...[
+              const SizedBox(height: 12),
+              const Text('请在另一台设备登录同一账号'),
+            ],
             const SizedBox(height: 20),
             Wrap(
               spacing: 8,
@@ -498,7 +504,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 12),
             FilledButton.icon(
-              onPressed: c.busy
+              onPressed: c.busy || !c.hasPeers
                   ? null
                   : () => c.run(() async {
                       await c.sendMessage(
@@ -521,12 +527,12 @@ class _HomeScreenState extends State<HomeScreen> {
         runSpacing: 12,
         children: [
           OutlinedButton.icon(
-            onPressed: c.busy ? null : c.sendClipboard,
+            onPressed: c.busy || !c.hasPeers ? null : c.sendClipboard,
             icon: const Icon(Icons.content_paste_go),
             label: const Text('发送剪贴板'),
           ),
           OutlinedButton.icon(
-            onPressed: c.busy ? null : c.pickFiles,
+            onPressed: c.busy || !c.hasPeers ? null : c.pickFiles,
             icon: const Icon(Icons.upload_file),
             label: const Text('发送文件'),
           ),
@@ -544,7 +550,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     '已选择 ${(c.shared?['files'] as List?)?.length ?? 0} 个文件',
               ),
               FilledButton(
-                onPressed: c.busy ? null : c.sendShared,
+                onPressed: c.busy || !c.hasPeers ? null : c.sendShared,
                 child: const Text('发送分享内容'),
               ),
             ],
@@ -661,7 +667,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               Text(
-                '${date(m['created_at'])} · ${m['status']}',
+                '${date(m['created_at'])} · ${messageStatusLabel(m['status'], incoming: incoming, file: file)}',
                 style: const TextStyle(color: Colors.blueGrey, fontSize: 12),
               ),
             ],
@@ -745,7 +751,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               Text(
-                '${size(t['file']['size'])} · ${t['status']} · ${date(t['created_at'])}',
+                '${size(t['file']['size'])} · ${transferStatusLabel(t['status'], incoming: t['target_device_id'] == c.deviceId)} · ${date(t['created_at'])}',
               ),
               const SizedBox(height: 10),
               LinearProgressIndicator(value: (t['progress'] as num) / 100),

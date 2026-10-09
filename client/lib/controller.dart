@@ -58,6 +58,7 @@ class CrossLinkController extends ChangeNotifier {
   double? progress;
   CancelToken? cancelToken;
   bool get signedIn => api?.tokens != null;
+  bool get hasPeers => devices.any((d) => d['id'] != deviceId);
   bool get windows =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
   bool get android =>
@@ -794,19 +795,41 @@ class CrossLinkController extends ChangeNotifier {
 
   Future<void> sendMessage(String kind, String content, {String? title}) async {
     if (!signedIn) throw const FormatException('请先登录');
-    if (content.trim().isEmpty) throw const FormatException('请输入要发送的内容');
-    final response = await api!.dio.post<dynamic>(
+    if (kind == 'clipboard' ? content.isEmpty : content.trim().isEmpty) {
+      throw const FormatException('请输入要发送的内容');
+    }
+    final activeApi = api!;
+    final session = _sessionGeneration;
+    final id = deviceId;
+    final command = {
+      'target_device_id': target,
+      'type': kind,
+      'payload': {'content': content, 'title': ?title},
+    };
+    final signature = jsonEncode(command);
+    final key = 'manual_pending_$id';
+    Map<String, dynamic>? pending;
+    try {
+      final saved = prefs.getString(key);
+      if (saved != null) pending = Map<String, dynamic>.from(jsonDecode(saved));
+    } catch (_) {}
+    if (pending?['signature'] != signature || pending?['id'] is! String) {
+      pending = {'signature': signature, 'id': const Uuid().v4()};
+      if (!await prefs.setString(key, jsonEncode(pending))) {
+        throw const FormatException('发送记录暂时无法保存，请稍后重试');
+      }
+    }
+    if (!_isActive(activeApi, session)) return;
+    final response = await activeApi.dio.post<dynamic>(
       '/messages',
-      data: {
-        'target_device_id': target,
-        'type': kind,
-        'client_message_id': const Uuid().v4(),
-        'payload': {'content': content, 'title': ?title},
-      },
+      data: {...command, 'client_message_id': pending!['id']},
     );
+    if (!_isActive(activeApi, session)) return;
     _putMessage(Map<String, dynamic>.from(response.data));
     await _saveCache();
-    text.clear();
+    if (!_isActive(activeApi, session)) return;
+    if (prefs.getString(key) == jsonEncode(pending)) await prefs.remove(key);
+    if (text.text == content) text.clear();
     update();
   }
 
@@ -998,6 +1021,7 @@ class CrossLinkController extends ChangeNotifier {
 
   Future<void> _clearSession() async {
     ++_sessionGeneration;
+    if (deviceId.isNotEmpty) await prefs.remove('manual_pending_$deviceId');
     _earlyReceipts.clear();
     _nativeStateOwner = null;
     _nativeRevision = -1;

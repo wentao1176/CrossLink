@@ -63,3 +63,37 @@ class MessageCache {
 
 String deviceProfileKey(String endpoint, String account) =>
     'device_uuid_${Uri.parse(endpoint).origin.toLowerCase()}_${account.trim().toLowerCase()}';
+
+String messageStatusLabel(
+  dynamic status, {
+  required bool incoming,
+  bool file = false,
+}) {
+  if (incoming) {
+    return {
+          'pending': '等待接收',
+          'delivered': '已接收',
+          'read': file ? '已保存文件' : '已使用',
+        }[status] ??
+        '待确认';
+  }
+  return {
+        'sent': '等待对方接收',
+        'pending': '等待对方接收',
+        'delivered': file ? '对方收到文件通知' : '已送达',
+        'read': file ? '对方已保存文件' : '已读',
+      }[status] ??
+      '待确认';
+}
+
+String transferStatusLabel(dynamic status, {required bool incoming}) =>
+    {
+      'waiting': incoming ? '等待下载' : '等待对方下载',
+      'pending': incoming ? '等待下载' : '等待对方下载',
+      'downloading': '正在下载',
+      'completed': incoming ? '文件已保存' : '对方已保存文件',
+      'failed': '传输失败，可重试',
+      'cancelled': '传输已取消',
+      'expired': '文件已过期',
+    }[status] ??
+    '等待处理';
