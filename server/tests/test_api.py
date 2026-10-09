@@ -298,3 +298,109 @@ def test_receipts_push_aggregate_state_to_sender(client, monkeypatch, transport)
         assert data["message_id"] == mid
         assert data["recipient_device_id"] == who["device_id"]
         assert data["status"] == expected
+
+def test_cleanup_reclaims_only_old_orphan_files(client):
+    import os
+    from app.files import cleanup
+    from app.models import now
+    a = login(client)
+    response = client.post("/api/v1/files/upload", headers=auth(a),
+        files={"file": ("kept.txt", b"kept", "text/plain")})
+    assert response.status_code == 201
+    settings = client.app.state.settings
+    directory = settings.file_storage_path
+    known = directory / response.json()["id"]
+    old = directory / str(uuid.uuid4())
+    fresh = directory / str(uuid.uuid4())
+    old.write_bytes(b"orphan")
+    fresh.write_bytes(b"recent")
+    cutoff = now() - 2 * 86400
+    os.utime(old, (cutoff, cutoff))
+    os.utime(known, (cutoff, cutoff))
+    cleanup(client.app.state.factory, settings)
+    assert not old.exists()
+    assert fresh.read_bytes() == b"recent"
+    assert known.read_bytes() == b"kept"
+
+
+def test_cleanup_preserves_inflight_final_file(client, monkeypatch):
+    import os, threading
+    from app import files
+    from app.models import now
+    a = login(client)
+    entered, release = threading.Event(), threading.Event()
+    original = files.create_message
+    paths, results = [], []
+    def pause(db, principal, body, settings):
+        path = settings.file_storage_path / body.payload["file_id"]
+        old = now() - 2 * 86400
+        os.utime(path, (old, old))
+        paths.append(path)
+        entered.set()
+        assert release.wait(10)
+        return original(db, principal, body, settings)
+    monkeypatch.setattr(files, "create_message", pause)
+    worker = threading.Thread(target=lambda: results.append(client.post(
+        "/api/v1/files/upload", headers=auth(a), files={"file": ("active.txt", b"active", "text/plain")})))
+    worker.start()
+    try:
+        assert entered.wait(5)
+        files.cleanup(client.app.state.factory, client.app.state.settings)
+        assert paths[0].read_bytes() == b"active"
+        assert worker.is_alive()
+    finally:
+        release.set()
+        worker.join(timeout=10)
+    assert not worker.is_alive()
+    assert results[0].status_code == 201
+    assert paths[0].read_bytes() == b"active"
+
+
+def test_cleanup_does_not_follow_symlinks(client, tmp_path):
+    import os
+    from app.files import cleanup
+    from app.models import now
+    directory = client.app.state.settings.file_storage_path
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"outside")
+    old = now() - 2 * 86400
+    os.utime(outside, (old, old))
+    links = [directory / str(uuid.uuid4()), directory / "abandoned.part"]
+    for link in links: link.symlink_to(outside)
+    cleanup(client.app.state.factory, client.app.state.settings)
+    assert all(link.is_symlink() for link in links)
+    assert outside.read_bytes() == b"outside"
+
+
+def test_process_exit_before_commit_is_recovered_as_orphan(tmp_path):
+    import os, sys, subprocess
+    from sqlalchemy import select
+    from app.files import cleanup
+    from app.models import File, now
+    database, directory = tmp_path / "crash.db", tmp_path / "files"
+    program = """
+import os, sys, uuid
+from fastapi.testclient import TestClient
+from app.main import create_app
+from app import files
+app=create_app(app_env='test',database_url='sqlite:///'+sys.argv[1],file_storage_path=sys.argv[2],jwt_secret='test-secret-32-characters-minimum!!')
+with TestClient(app) as client:
+ client.post('/api/v1/auth/register',json={'username':'crash_user','email':'crash@example.com','password':'LongPassword123!'})
+ tokens=client.post('/api/v1/auth/login',json={'account':'crash_user','password':'LongPassword123!','device':{'device_uuid':str(uuid.uuid4()),'device_name':'Crash','platform':'windows'}}).json()
+ def crash(*args,**kwargs): os._exit(77)
+ files.create_message=crash
+ client.post('/api/v1/files/upload',headers={'Authorization':'Bearer '+tokens['access_token']},files={'file':('orphan.txt',b'crash','text/plain')})
+"""
+    result = subprocess.run([sys.executable, "-c", program, str(database), str(directory)],
+                            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, capture_output=True, text=True)
+    assert result.returncode == 77, result.stderr
+    orphan = list(directory.iterdir())
+    assert len(orphan) == 1 and orphan[0].suffix != ".part"
+    app = create_app(app_env="test", database_url=f"sqlite:///{database}", file_storage_path=directory,
+                     jwt_secret="test-secret-32-characters-minimum!!")
+    with TestClient(app):
+        with app.state.factory() as db: assert list(db.scalars(select(File))) == []
+        old = now() - 2 * 86400
+        os.utime(orphan[0], (old, old))
+        cleanup(app.state.factory, app.state.settings)
+        assert not orphan[0].exists()

@@ -1,5 +1,8 @@
 import hashlib
 import re
+import stat
+import threading
+from uuid import UUID
 from pathlib import Path
 from fastapi import APIRouter,Depends,Request,UploadFile,File as Upload,Form,Query
 from fastapi.responses import FileResponse
@@ -10,6 +13,8 @@ from .messages import create_message,push_message
 from .dependencies import get_db,principal
 from .security import fail
 router=APIRouter(prefix="/api/v1")
+_storage_lock=threading.RLock()
+_active_uploads:set[str]=set()
 def file_view(f):return {"id":f.id,"name":f.original_name,"size":f.size,"mime_type":f.mime_type,"sha256":f.sha256,"created_at":f.created_at,"expires_at":f.expires_at}
 def safe_name(name):
     name=(name or "file").replace("\\","/").split("/")[-1]
@@ -20,6 +25,7 @@ async def upload(request:Request,file:UploadFile=Upload(...),target_device_id:st
     settings=request.app.state.settings
     file_id=uid();path=settings.file_storage_path/file_id;part=settings.file_storage_path/(file_id+".part")
     size=0;hasher=hashlib.sha256();committed=False
+    with _storage_lock:_active_uploads.add(file_id)
     try:
         with part.open("xb") as out:
             while chunk:=await file.read(1024*1024):
@@ -35,8 +41,11 @@ async def upload(request:Request,file:UploadFile=Upload(...),target_device_id:st
         await push_message(request.app,db,m,recipients)
         return {**file_view(f),"message_id":m.id}
     finally:
-        await file.close();part.unlink(missing_ok=True)
-        if not committed:path.unlink(missing_ok=True);db.rollback()
+        try:
+            await file.close();part.unlink(missing_ok=True)
+            if not committed:path.unlink(missing_ok=True);db.rollback()
+        finally:
+            with _storage_lock:_active_uploads.discard(file_id)
 @router.get("/files")
 def files(p=Depends(principal),db=Depends(get_db),limit:int=Query(100,ge=1,le=500)):
     return [file_view(f) for f in db.scalars(select(File).where(File.user_id==p.user.id).order_by(File.created_at.desc()).limit(limit))]
@@ -65,12 +74,33 @@ def transfer(transfer_id:str,body:TransferUpdate,p=Depends(principal),db=Depends
     t.status=body.status;t.progress=100 if body.status=="completed" else body.progress
     if body.status=="completed":t.completed_at=now()
     db.commit();return {"id":t.id,"status":t.status,"progress":t.progress}
+def _regular_stat(path):
+    try:
+        info=path.lstat()
+        return info if stat.S_ISREG(info.st_mode) else None
+    except FileNotFoundError:return None
+
 def cleanup(factory,settings):
+    cutoff=now()-86400
     with factory() as db:
         for f in db.scalars(select(File).where(File.expires_at<=now())):
-            (settings.file_storage_path/f.storage_name).unlink(missing_ok=True)
-            db.execute(update(Transfer).where(Transfer.file_id==f.id,Transfer.status!="completed").values(status="expired"))
+            with _storage_lock:
+                if f.id in _active_uploads:continue
+                path=settings.file_storage_path/f.storage_name
+                if _regular_stat(path) is not None:path.unlink(missing_ok=True)
+                db.execute(update(Transfer).where(Transfer.file_id==f.id,Transfer.status!="completed").values(status="expired"))
         for c in db.scalars(select(Clipboard).where(Clipboard.expires_at<=now())):db.delete(c)
         db.commit()
-    for part in settings.file_storage_path.glob("*.part"):
-        if part.stat().st_mtime<now()-86400:part.unlink(missing_ok=True)
+        for path in settings.file_storage_path.iterdir():
+            partial=path.name.endswith(".part")
+            file_id=path.name[:-5] if partial else path.name
+            if not partial:
+                try:
+                    if str(UUID(file_id))!=file_id:continue
+                except ValueError:continue
+            with _storage_lock:
+                if file_id in _active_uploads:continue
+                info=_regular_stat(path)
+                if info is None or info.st_mtime>=cutoff:continue
+                if not partial and db.scalar(select(File.id).where(File.storage_name==file_id)) is not None:continue
+                path.unlink(missing_ok=True)
