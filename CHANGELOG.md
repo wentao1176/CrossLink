@@ -35,3 +35,4 @@
 ## Unreleased — 2026-10-09
 - Android UI reattach uses native connection snapshots and ordered state events; old owners and older state revisions are ignored.
 - Device names survive sign-in and revocation; current-device display follows remote rename, and stale reloads cannot repopulate a logged-out session.
+- Delivery/read receipts reach senders in real time over both transports; reconnect history reconciles missed updates and stale events cannot restore logged-out history.

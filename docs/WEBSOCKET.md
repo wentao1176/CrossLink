@@ -8,3 +8,5 @@ Every 30 seconds send `{type:"ping"}`; receive `{type:"pong"}`. Server closes af
 ACK: `{type:"ack",message_id:"..."}`; read: `{type:"read",message_id:"..."}`. Reply `message.ack` includes message_id/status; unauthorized ACK yields an error event and cannot mutate another device's receipt. REST ACK/read are also supported. Deduplicate by durable message id, not ephemeral websocket event_id. The client saves received messages before ACK. No automatic clipboard read/write synchronization in this version.
 
 One worker only: the in-memory Hub handles the current MVP, while PostgreSQL stores durable receipts. Redis Compose profile is reserved; do not increase worker count until pub/sub fanout is implemented.
+
+Sender receipt event `message.receipt.updated`: data includes message_id, recipient_device_id, recipient_status and aggregate status. It follows durable ACK/read commit and is sent only to the original sender device. Clients merge monotonically and reconcile history after reconnect, without ACKing or notifying about receipt updates.

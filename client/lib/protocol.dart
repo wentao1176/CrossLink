@@ -20,6 +20,8 @@ String normalizeEndpoint(String value) {
 
 int reconnectSeconds(int attempt) => min(30, 1 << min(5, max(0, attempt)));
 
+const _receiptRank = {'sent': 0, 'pending': 1, 'delivered': 2, 'read': 3};
+
 class MessageCache {
   MessageCache({this.maxItems = 100});
   final int maxItems;
@@ -30,11 +32,29 @@ class MessageCache {
     if (id is! String || id.isEmpty) return false;
     final index = _items.indexWhere((m) => m['id'] == id);
     if (index >= 0) {
-      _items[index] = {..._items[index], ...value};
+      final previous = _items[index];
+      final next = {...previous, ...value};
+      if ((_receiptRank[previous['status']] ?? -1) >
+          (_receiptRank[next['status']] ?? -1)) {
+        next['status'] = previous['status'];
+      }
+      _items[index] = next;
       return false;
     }
     _items.insert(0, Map.of(value));
     if (_items.length > maxItems) _items.removeRange(maxItems, _items.length);
+    return true;
+  }
+
+  bool updateReceipt(String messageId, String status) {
+    final index = _items.indexWhere((m) => m['id'] == messageId);
+    if (index < 0 || !_receiptRank.containsKey(status)) return false;
+    final previous = _items[index]['status'];
+    if (previous == status ||
+        (_receiptRank[previous] ?? -1) > _receiptRank[status]!) {
+      return false;
+    }
+    _items[index] = {..._items[index], 'status': status};
     return true;
   }
 

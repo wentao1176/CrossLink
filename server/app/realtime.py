@@ -6,7 +6,7 @@ from fastapi import WebSocket,WebSocketDisconnect,HTTPException
 from sqlalchemy import select
 from .models import Message,Receipt,Device,now,uid
 from .security import authenticate
-from .messages import event_for,view,acknowledge
+from .messages import event_for,view,acknowledge,publish_receipt
 logger=logging.getLogger("crosslink")
 def envelope(event,data):return {"event":event,"event_id":uid(),"timestamp":now(),"data":data}
 @dataclass(eq=False)
@@ -75,6 +75,7 @@ async def websocket_handler(ws:WebSocket):
                 elif data.get("type") in {"ack","read"}:
                     try:
                         result=acknowledge(db,p,str(data.get("message_id","")),data["type"]=="read")
+                        await publish_receipt(app,db,result["message_id"],p.device.id)
                         await conn.emit(envelope("message.ack",result))
                     except HTTPException as e:await conn.emit(envelope("error",e.detail))
                 else:await conn.emit(envelope("error",{"code":"INVALID_EVENT","message":"Use ping, ack or read"}))

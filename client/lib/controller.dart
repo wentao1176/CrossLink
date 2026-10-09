@@ -416,7 +416,7 @@ class CrossLinkController extends ChangeNotifier {
         }
       });
       await pullPending();
-      await _refreshDevices();
+      await reload();
       update();
     } catch (e) {
       error = userError(e);
@@ -484,6 +484,8 @@ class CrossLinkController extends ChangeNotifier {
         'notification.created',
       ].contains(event)) {
         await _receive(Map<String, dynamic>.from(value['data']));
+      } else if (event == 'message.receipt.updated') {
+        await _receiveReceipt(Map<String, dynamic>.from(value['data']));
       } else if (event.startsWith('device.')) {
         await _refreshDevices();
       }
@@ -510,6 +512,8 @@ class CrossLinkController extends ChangeNotifier {
         'notification.created',
       ].contains(event)) {
         await _receive(Map<String, dynamic>.from(data['data']));
+      } else if (event == 'message.receipt.updated') {
+        await _receiveReceipt(Map<String, dynamic>.from(data['data']));
       } else if (event.startsWith('device.')) {
         await _refreshDevices();
         update();
@@ -520,12 +524,40 @@ class CrossLinkController extends ChangeNotifier {
     }
   }
 
+  bool _isActive(Api activeApi, int session) =>
+      !disposed &&
+      signedIn &&
+      api == activeApi &&
+      session == _sessionGeneration;
+
+  Future<void> _receiveReceipt(Map<String, dynamic> receipt) async {
+    if (!signedIn) return;
+    final id = receipt['message_id'];
+    final status = receipt['status'];
+    if (id is! String || status is! String) return;
+    final sent = cache.items.any(
+      (m) => m['id'] == id && m['sender_device_id'] == deviceId,
+    );
+    if (sent && cache.updateReceipt(id, status)) {
+      await _saveCache();
+      update();
+    }
+  }
+
   Future<void> _receive(Map<String, dynamic> m) async {
+    if (!signedIn) return;
+    final activeApi = api!;
+    final session = _sessionGeneration;
     final fresh = cache.put(m);
     await _saveCache();
-    final receipt = await api!.dio.post<dynamic>('/messages/${m['id']}/ack');
+    if (!_isActive(activeApi, session)) return;
+    final receipt = await activeApi.dio.post<dynamic>(
+      '/messages/${m['id']}/ack',
+    );
+    if (!_isActive(activeApi, session)) return;
     cache.put({...m, 'status': receipt.data['status']});
     await _saveCache();
+    if (!_isActive(activeApi, session)) return;
     if (fresh && !android) {
       final payload = Map<String, dynamic>.from(m['payload']);
       try {
@@ -537,10 +569,17 @@ class CrossLinkController extends ChangeNotifier {
         );
       } catch (_) {}
     }
+    if (!_isActive(activeApi, session)) return;
     if (m['type'] == 'file' || m['type'] == 'image') {
-      transfers = await api!.list('/transfers');
+      final list = await activeApi.list('/transfers');
+      if (!_isActive(activeApi, session)) return;
+      transfers = list;
     }
-    if (m['type'] == 'clipboard') clips = await api!.list('/clipboard');
+    if (m['type'] == 'clipboard') {
+      final list = await activeApi.list('/clipboard');
+      if (!_isActive(activeApi, session)) return;
+      clips = list;
+    }
     update();
   }
 

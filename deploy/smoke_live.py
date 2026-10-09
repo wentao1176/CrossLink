@@ -45,6 +45,9 @@ try:
         event=recv(wa,"clipboard.updated");assert event["data"]["id"]==mid
         assert time.monotonic()-start<2
         wa.send(json.dumps({"type":"ack","message_id":mid}));assert recv(wa,"message.ack")["data"]["status"]=="delivered"
+        receipt=recv(wb,"message.receipt.updated")["data"];assert receipt["message_id"]==mid and receipt["status"]=="delivered"
+        wa.send(json.dumps({"type":"read","message_id":mid}));assert recv(wa,"message.ack")["data"]["status"]=="read"
+        assert recv(wb,"message.receipt.updated")["data"]["status"]=="read"
     print("PASS: real PostgreSQL, two devices, presence, clipboard websocket under 2 seconds, ACK")
     data="CrossLink 文件传输测试\n".encode()
     f=check(client.post("/api/v1/files/upload",headers=headers(a),data={"target_device_id":b["device_id"]},files={"file":("验证.txt",data,"text/plain")}),201)

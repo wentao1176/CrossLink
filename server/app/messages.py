@@ -64,6 +64,11 @@ def create_message(db,p,body,settings):
     return m,recipients,True
 async def push_message(app,db,m,recipients):
     for device_id in recipients:await app.state.hub.send(device_id,event_for(m),view(db,m,device_id))
+async def publish_receipt(app,db,message_id,recipient_device_id):
+    message=db.get(Message,message_id)
+    receipt=db.scalar(select(Receipt).where(Receipt.message_id==message_id,Receipt.device_id==recipient_device_id))
+    if message is not None and receipt is not None:
+        await app.state.hub.send(message.sender_device_id,"message.receipt.updated",{"message_id":message.id,"recipient_device_id":recipient_device_id,"recipient_status":receipt.status,"status":view(db,message,message.sender_device_id)["status"]})
 def acknowledge(db,p,message_id,read=False):
     row=db.scalar(select(Receipt).join(Message,Receipt.message_id==Message.id).where(Receipt.message_id==message_id,Receipt.device_id==p.device.id,Message.user_id==p.user.id).with_for_update())
     if not row:fail(404,"MESSAGE_NOT_FOUND","Recipient message not found")
@@ -91,9 +96,15 @@ def history(p=Depends(principal),db=Depends(get_db),limit:int=Query(100,ge=1,le=
     if before is not None:query=query.where(Message.created_at<before)
     return [view(db,m,p.device.id) for m in db.scalars(query.order_by(Message.created_at.desc(),Message.id.desc()).limit(limit))]
 @router.post("/messages/{message_id}/ack")
-def ack(message_id:str,p=Depends(principal),db=Depends(get_db)):return acknowledge(db,p,message_id)
+async def ack(message_id:str,request:Request,p=Depends(principal),db=Depends(get_db)):
+    result=acknowledge(db,p,message_id)
+    await publish_receipt(request.app,db,message_id,p.device.id)
+    return result
 @router.post("/messages/{message_id}/read")
-def read(message_id:str,p=Depends(principal),db=Depends(get_db)):return acknowledge(db,p,message_id,True)
+async def read(message_id:str,request:Request,p=Depends(principal),db=Depends(get_db)):
+    result=acknowledge(db,p,message_id,True)
+    await publish_receipt(request.app,db,message_id,p.device.id)
+    return result
 @router.get("/clipboard")
 def clipboard(p=Depends(principal),db=Depends(get_db),limit:int=Query(50,ge=1,le=100)):
     return [{"id":c.id,"device_id":c.device_id,"content":c.content,"content_hash":c.content_hash,"created_at":c.created_at,"expires_at":c.expires_at} for c in db.scalars(select(Clipboard).where(Clipboard.user_id==p.user.id,Clipboard.expires_at>now()).order_by(Clipboard.created_at.desc()).limit(limit))]

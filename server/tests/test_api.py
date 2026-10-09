@@ -265,3 +265,36 @@ def test_custom_device_name_survives_relogin(client, revoked):
     assert result.status_code == 200
     names = client.get("/api/v1/devices", headers=auth(result.json())).json()
     assert next(d for d in names if d["id"] == b["device_id"])["name"] == "My phone"
+
+@pytest.mark.parametrize("transport", ["rest", "websocket"])
+def test_receipts_push_aggregate_state_to_sender(client, monkeypatch, transport):
+    events = []
+    async def capture(device_id, event, data):
+        events.append((device_id, event, data))
+    monkeypatch.setattr(client.app.state.hub, "send", capture)
+    a = login(client)
+    b = login(client, device="Phone", register=False)
+    c = login(client, device="Tablet", register=False)
+    mid = send(client, a).json()["id"]
+    events.clear()
+    for who, action, expected in [
+        (b, "ack", "pending"), (c, "ack", "delivered"),
+        (b, "read", "delivered"), (c, "read", "read"),
+        (b, "ack", "read")]:
+        if transport == "rest":
+            result = client.post(f"/api/v1/messages/{mid}/{action}", headers=auth(who))
+            assert result.status_code == 200
+        else:
+            with client.websocket_connect("/ws") as ws:
+                ws_auth(ws, who)
+                ws.send_json({"type": action, "message_id": mid})
+                assert recv(ws, "message.ack")["data"]["message_id"] == mid
+        receipts = [e for e in events if e[1] == "message.receipt.updated"]
+        assert receipts, "Sender did not receive a receipt event"
+        target, kind, data = receipts[-1]
+        events.clear()
+        assert target == a["device_id"]
+        assert kind == "message.receipt.updated"
+        assert data["message_id"] == mid
+        assert data["recipient_device_id"] == who["device_id"]
+        assert data["status"] == expected
