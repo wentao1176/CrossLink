@@ -101,8 +101,10 @@ class ClipboardSync {
       if (value != null && value.isNotEmpty && (sendCurrent || changed)) {
         if (sendCurrent) _lastSequence = -1;
         await onLocalChange(value, local.sequence);
-      } else if (_pending == null) {
-        _lastHash = hash;
+      } else {
+        // Native counters may restart with the process. Establish this watch's
+        // baseline without replacing a persisted pending operation.
+        if (_pending == null) _lastHash = hash;
         _lastSequence = local.sequence;
         await _save();
       }
@@ -111,7 +113,7 @@ class ClipboardSync {
     if (enabled && status == '连接剪贴板') _status('已启用，等待复制');
   }
 
-  void pause() {
+  Future<void> pause() async {
     enabled = false;
     _snapshotReady = false;
     ++_epoch;
@@ -119,10 +121,18 @@ class ClipboardSync {
     _remote = null;
     _writingHash = null;
     _status('已暂停');
-    unawaited(_save());
+    await _save();
   }
 
-  void dispose() => pause();
+  Future<void> dispose() async {
+    enabled = false;
+    _snapshotReady = false;
+    ++_epoch;
+    _remote = null;
+    _writingHash = null;
+    await _save();
+  }
+
   void connectionLost() {
     ++_epoch;
     _snapshotReady = false;
@@ -286,7 +296,8 @@ class ClipboardSync {
       }
       if (local.text != null &&
           _lastHash != null &&
-          _hash(local.text!) != _lastHash) {
+          (_hash(local.text!) != _lastHash ||
+              local.sequence != _lastSequence)) {
         await onLocalChange(local.text!, local.sequence);
         continue;
       }
@@ -333,7 +344,8 @@ class ClipboardSync {
       if (local.available &&
           local.text != null &&
           _lastHash != null &&
-          _hash(local.text!) != _lastHash) {
+          (_hash(local.text!) != _lastHash ||
+              local.sequence != _lastSequence)) {
         await onLocalChange(local.text!, local.sequence);
       }
       if (!enabled || epoch != _epoch || _pending != null) return;

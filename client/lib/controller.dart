@@ -310,17 +310,18 @@ class CrossLinkController extends ChangeNotifier {
         await _activateClipboard(sendCurrent: true);
       } else {
         _clipboardRetry?.cancel();
-        _clipboard?.pause();
+        await _clipboard?.pause();
         final owner = _clipboardOwner;
         if (owner != null) await bridge.watchClipboard(false, owner);
       }
     });
   }
 
-  Future<void> _stopClipboard() async {
+  Future<void> _stopClipboard({bool discardPending = false}) async {
     final owner = _clipboardOwner;
     _clipboardRetry?.cancel();
-    _clipboard?.dispose();
+    if (discardPending) await _clipboard?.pause();
+    await _clipboard?.dispose();
     _clipboard = null;
     _clipboardOwner = null;
     clipboardSyncEnabled = false;
@@ -341,7 +342,7 @@ class CrossLinkController extends ChangeNotifier {
       deviceName = await bridge.deviceName();
       final identityKey = deviceProfileKey(endpoint, account);
       deviceUuid = prefs.getString(identityKey) ?? const Uuid().v4();
-      await shutdown();
+      await shutdown(discardClipboard: true);
       if (android) await bridge.stopBackground();
       _setupApi();
       if (email != null) {
@@ -1001,7 +1002,7 @@ class CrossLinkController extends ChangeNotifier {
     _nativeStateOwner = null;
     _nativeRevision = -1;
     api?.tokens = null;
-    await shutdown();
+    await shutdown(discardClipboard: true);
     if (android) await bridge.stopBackground();
     if (!kIsWeb) await storage.delete(key: 'crosslink_session');
     api?.tokens = null;
@@ -1015,8 +1016,8 @@ class CrossLinkController extends ChangeNotifier {
     update();
   }
 
-  Future<void> shutdown() async {
-    await _stopClipboard();
+  Future<void> shutdown({bool discardClipboard = false}) async {
+    await _stopClipboard(discardPending: discardClipboard);
     ++_generation;
     retry?.cancel();
     heartbeat?.cancel();

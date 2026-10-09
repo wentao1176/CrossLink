@@ -76,6 +76,67 @@ class ClipboardFixture {
 }
 
 void main() {
+  test(
+    'normal exit preserves the durable offline operation for restart',
+    () async {
+      final f = ClipboardFixture();
+      f.offline = true;
+      await f.sync.enable();
+      await f.copy('offline before exit');
+      final id = f.sends.single['id'];
+      await Future<void>.sync(f.sync.dispose);
+      final restored = ClipboardFixture(restored: f.saved);
+      restored.text = 'offline before exit';
+      restored.latest = clipMessage(1, 'older peer');
+      restored.serverVersion = 1;
+      await restored.sync.enable();
+      expect(restored.sends.single['id'], id);
+      expect(restored.text, 'offline before exit');
+      expect(restored.writes, isEmpty);
+    },
+  );
+  test(
+    'focus reconciliation sends a same-text copy with a new native sequence',
+    () async {
+      final f = ClipboardFixture();
+      await f.sync.enable();
+      f.canRead = false;
+      await f.receive(2, 'peer while unfocused');
+      f.sequence++;
+      f.canRead = true;
+      await f.sync.reconcile();
+      expect(f.sends.single['text'], 'baseline');
+      expect(f.text, 'baseline');
+      expect(f.writes, isEmpty);
+    },
+  );
+  test(
+    'a remote update cannot overwrite an unobserved same-text local copy',
+    () async {
+      final f = ClipboardFixture();
+      await f.sync.enable();
+      f.sequence++;
+      await f.receive(2, 'peer');
+      expect(f.sends.single['text'], 'baseline');
+      expect(f.text, 'baseline');
+      expect(f.writes, isEmpty);
+    },
+  );
+  test(
+    'a restarted native sequence is baselined before remote application',
+    () async {
+      final f = ClipboardFixture();
+      await f.sync.enable();
+      f.sequence = 50;
+      await f.copy('baseline');
+      await Future<void>.sync(f.sync.dispose);
+      final restored = ClipboardFixture(restored: f.saved);
+      restored.latest = clipMessage(2, 'new peer');
+      await restored.sync.enable();
+      expect(restored.sends, isEmpty);
+      expect(restored.text, 'new peer');
+    },
+  );
   test('a local Unicode copy produces a stable relay operation', () async {
     final f = ClipboardFixture();
     await f.sync.enable();

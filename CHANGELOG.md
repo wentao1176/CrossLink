@@ -41,3 +41,4 @@
 - Preserve receipts arriving before HTTP send responses; copying outgoing text does not fabricate read status. Migrate legacy outgoing read cache and reject out-of-order device refreshes.
 - Add versioned, expiring clipboard relay snapshots with atomic per-account revisions and idempotent operations; synchronization policy handles echo suppression, offline pending copies and stale reads/replay. Native OS/UI wiring is the next increment.
 - Wire text clipboard sync into native Windows/Android and settings: explicit opt-in, same-account relay, direct target paste, focus-aware Android and session-safe pause. Windows clipboard writes reject changed local sequences.
+- Normal shutdown preserves durable offline clipboard operation IDs; focused reads detect same-text recopy by native sequence and baseline reset counters on restart.
